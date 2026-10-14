@@ -158,11 +158,17 @@ class GitHubUpdateChecker : Closeable {
 }
 
 export function validateBadging(badging, version, versionCode) {
+  const metadata = badging.split(/\r?\n/).filter(line => /^(?:package:|application-label:|minSdkVersion:|sdkVersion:|native-code:)/.test(line))
+    .map(line => line.slice(0, 300)).slice(0, 8).join(' | ');
+  const fail = message => { throw new Error(`${message} Actual APK metadata: ${metadata || '<missing>'}`); };
   if (!badging.includes(`name='${APP_ID}'`) || !badging.includes(`versionCode='${versionCode}'`) || !badging.includes(`versionName='${version}'`))
-    throw new Error('APK package/version metadata does not match this fork build.');
-  if (!/^application-label(?:-[^:]+)?:'SFA Baidu'$/m.test(badging)) throw new Error('APK application name was not overlaid.');
-  if (!/^sdkVersion:'24'$/m.test(badging)) throw new Error('The modern APK must have minimum SDK 24 (Android 7).');
-  if (!/^native-code: 'arm64-v8a'$/m.test(badging)) throw new Error('APK is not exclusively arm64-v8a.');
+    fail('APK package/version metadata does not match this fork build.');
+  if (!/^application-label(?:-[^:]+)?:'SFA Baidu'\r?$/m.test(badging)) fail('APK application name was not overlaid.');
+  // Current AAPT2 uses minSdkVersion; older releases used sdkVersion. Accept
+  // only API 24 (including its zero-minor spelling), never another minimum API.
+  const minimumSdk = badging.match(/^(?:minSdkVersion|sdkVersion):'([^']+)'\r?$/m)?.[1];
+  if (!['24', '24.0'].includes(minimumSdk)) fail('The modern APK must have minimum SDK 24 (Android 7).');
+  if (!/^native-code: 'arm64-v8a'\r?$/m.test(badging)) fail('APK is not exclusively arm64-v8a.');
 }
 
 export function validateNativeCore(native, version) {

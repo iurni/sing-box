@@ -33,6 +33,12 @@ test('Android overlay uses a separate app ID and removes all non-arm64 outputs',
 test('APK metadata gate rejects another package, ABI, version or minimum SDK', () => {
   const correct = `package: name='${APP_ID}' versionCode='1791958400' versionName='1.14.3-baidu.1234'\napplication-label:'SFA Baidu'\nsdkVersion:'24'\nnative-code: 'arm64-v8a'`;
   assert.doesNotThrow(() => validateBadging(correct, '1.14.3-baidu.1234', 1791958400));
+  for (const field of ['sdkVersion', 'minSdkVersion']) {
+    for (const value of ['24', '24.0'])
+      assert.doesNotThrow(() => validateBadging(correct.replace("sdkVersion:'24'", `${field}:'${value}'`), '1.14.3-baidu.1234', 1791958400));
+    for (const value of ['23', '25', '24.1'])
+      assert.throws(() => validateBadging(correct.replace("sdkVersion:'24'", `${field}:'${value}'`), '1.14.3-baidu.1234', 1791958400), /minimum SDK 24.*Actual APK metadata/);
+  }
   for (const [from, to] of [[APP_ID, 'io.nekohasekai.sfa'], ["sdkVersion:'24'", "sdkVersion:'21'"], ["native-code: 'arm64-v8a'", "native-code: 'arm64-v8a' 'x86'"], ['1791958400', '1791958401']])
     assert.throws(() => validateBadging(correct.replace(from, to), '1.14.3-baidu.1234', 1791958400));
 });
