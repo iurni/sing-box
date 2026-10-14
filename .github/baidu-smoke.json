@@ -1,0 +1,15 @@
+{
+  "log": { "level": "warn" },
+  "outbounds": [
+    {
+      "type": "baidu",
+      "tag": "baidu-smoke",
+      "server": "127.0.0.1",
+      "server_port": 1,
+      "secret": "CI-DUMMY-NOT-A-REAL-CREDENTIAL",
+      "host": "example.invalid",
+      "user_agent": "sing-box-baidu-CI"
+    }
+  ],
+  "route": { "final": "baidu-smoke" }
+}

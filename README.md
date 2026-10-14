@@ -2,6 +2,10 @@
 
 The universal proxy platform.
 
+This fork adds an experimental `baidu` TCP outbound. See the
+[Baidu fork guide](README.baidu.md), [outbound configuration](docs/configuration/outbound/baidu.md),
+and [stable-release maintenance guide](docs/custom/BAIDU-MAINTENANCE.md).
+
 [![Packaging status](https://repology.org/badge/vertical-allrepos/sing-box.svg)](https://repology.org/project/sing-box/versions)
 
 ## Documentation
