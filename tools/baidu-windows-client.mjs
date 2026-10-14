@@ -68,6 +68,8 @@ export function planWindowsPatches(root, version) {
   replace(c('src/main/index.ts'), 'app.setAsDefaultProtocolClient("sing-box")', 'app.setAsDefaultProtocolClient("sing-box-baidu")');
   replace(c('src/main/index.ts'), 'sing-box:', 'sing-box-baidu:', 3);
   replace(c('src/main/updates.ts'), 'https://api.github.com/repos/SagerNet/sing-box/releases', 'https://api.github.com/repos/iurni/sing-box/releases');
+  replace(c('src/main/updates.ts'), 'const APP_IS_PRERELEASE = prerelease(__APP_VERSION__) !== null;',
+    'const APP_IS_PRERELEASE = !/^\\d+\\.\\d+\\.\\d+-baidu\\.\\d+$/.test(__APP_VERSION__) && prerelease(__APP_VERSION__) !== null;');
   replace(c('src/main/worker.ts'), 'sing-box-worker.', 'sing-box-baidu-worker.', 2);
   replace(c('src/main/worker.ts'), 'http://sing-box-worker', 'http://sing-box-baidu-worker');
   replace(c('src/main/daemon.ts'), 'Administrators\\\\sing-box"', 'Administrators\\\\sing-box-baidu"');
@@ -136,6 +138,12 @@ export function validateChangedSourceScope(root, state) {
   const changed = directory => git(directory, 'diff', '--ignore-submodules=untracked', '--name-only', 'HEAD', '--')
     .split(/\r?\n/).filter(Boolean).sort();
   if (state.dashboardSource) {
+    const clientDirectory = join(root, CLIENT);
+    const headDashboardSource = git(clientDirectory, 'ls-tree', 'HEAD', 'dashboard').split(/\s+/)[2];
+    assert.equal(headDashboardSource, state.dashboardSource, 'The SFW HEAD dashboard gitlink changed.');
+    const stagedDashboard = git(clientDirectory, 'ls-files', '--stage', '--', 'dashboard').split(/\s+/);
+    assert.deepEqual(stagedDashboard, ['160000', state.dashboardSource, '0', 'dashboard'],
+      'The SFW index dashboard gitlink changed or is conflicted.');
     assert.equal(git(join(root, DASHBOARD), 'rev-parse', 'HEAD'), state.dashboardSource,
       'The pinned dashboard source changed during packaging.');
     const vendorPath = 'vendor/iterm2-color-schemes';
@@ -154,11 +162,17 @@ export function validateChangedSourceScope(root, state) {
       .map(output => output.file.slice(DASHBOARD.length + 1)).sort();
     assert.deepEqual(changed(join(root, DASHBOARD)), expectedDashboard,
       'Dashboard tracked changes do not exactly match its declared generated icon file.');
-    if (expectedDashboard.length) clientPaths.push('dashboard');
   }
   assert.deepEqual(changed(root), [...rootPaths, CLIENT].sort(),
     'Root tracked working changes do not exactly match the declared Windows overlay.');
-  assert.deepEqual(changed(join(root, CLIENT)), clientPaths.sort(),
+  assertClientOverlayPaths(changed(join(root, CLIENT)), clientPaths, Boolean(state.dashboardSource));
+}
+
+export function assertClientOverlayPaths(actual, expected, dashboardChecked) {
+  // The parent gitlink's dirty marker is not evidence of a source-content diff:
+  // HEAD/index pointers and the nested sources were independently checked above.
+  const scoped = dashboardChecked ? actual.filter(file => file !== 'dashboard') : actual;
+  assert.deepEqual(scoped.sort(), [...expected].sort(),
     'SFW tracked working changes do not exactly match the declared Windows overlay.');
 }
 

@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { test } from 'node:test';
-import { executableContentDigest, planWindowsPatches, portableExecutableMachine, validateChangedSourceScope } from './baidu-windows-client.mjs';
+import { assertClientOverlayPaths, executableContentDigest, planWindowsPatches, portableExecutableMachine, validateChangedSourceScope } from './baidu-windows-client.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 
@@ -124,6 +125,11 @@ test('source scope accepts declared overlays and ignored build files but rejects
     writeFileSync(join(client, 'bin/daemon.exe'), 'ignored build\n');
     writeFileSync(join(client, 'signing.local.json'), '{}\n');
     assert.doesNotThrow(() => validateChangedSourceScope(fixture, state));
+    assert.doesNotThrow(() => assertClientOverlayPaths(['version.json', 'dashboard'], ['version.json'], true));
+    assert.throws(() => assertClientOverlayPaths(['version.json', 'dashboard'], ['version.json'], false), /SFW tracked working changes/);
+    git(client, 'update-index', '--cacheinfo', '160000', git(client, 'rev-parse', 'HEAD').trim(), 'dashboard');
+    assert.throws(() => validateChangedSourceScope(fixture, state), /index dashboard gitlink changed/);
+    git(client, 'update-index', '--cacheinfo', '160000', state.dashboardSource, 'dashboard');
     // Reproduce the CI failure: only an untracked generation/cache output makes
     // the parent report "dashboard" dirty, without any dashboard source diff.
     writeFileSync(join(dashboard, '.pnpm-generated-state.json'), '{}\n');
@@ -155,4 +161,37 @@ test('source scope accepts declared overlays and ignored build files but rejects
     writeFileSync(join(client, 'other.ts'), 'unrelated tracked edit\n');
     assert.throws(() => validateChangedSourceScope(fixture, state), /SFW tracked working changes/);
   } finally { rmSync(fixture, { recursive: true, force: true }); }
+});
+
+test('the actual patched SFW version selector follows stable fork releases without repeat or downgrade prompts', () => {
+  // Node distributions ship npm's SemVer implementation. Reuse that installed
+  // dependency to exercise the exact selector without installing Electron first.
+  let semver;
+  for (const npmMetadata of [join(dirname(process.execPath), 'node_modules/npm/package.json'),
+    join(dirname(process.execPath), '../lib/node_modules/npm/package.json')]) {
+    try { semver = createRequire(npmMetadata)('semver'); break; } catch {}
+  }
+  assert(semver, 'The Node distribution must provide npm with SemVer.');
+  const source = planWindowsPatches(root, '1.14.3-baidu.123').get('clients/desktop/src/main/updates.ts').after;
+  const prereleaseLine = source.match(/^const APP_IS_PRERELEASE = .+;$/m)?.[0];
+  const defaultTrack = source.match(/"update_track",\s*([^,\n]+),/)?.[1];
+  const selector = source.match(/^function shouldIncludeVersion[\s\S]*?^}/m)?.[0]
+    .replace('version: string, track: UpdateTrack): boolean', 'version, track)');
+  assert(prereleaseLine && defaultTrack && selector);
+  const evaluate = new Function('__APP_VERSION__', 'prerelease', 'valid', 'gt',
+    `${prereleaseLine}\n${selector}\nreturn { defaultTrack: ${defaultTrack}, include: shouldIncludeVersion };`);
+  const forVersion = current => evaluate(current, semver.prerelease, semver.valid, semver.gt);
+  const installed = forVersion('1.14.3-baidu.100');
+  assert.equal(installed.defaultTrack, 'stable');
+  for (const [candidate, expected] of [
+    ['1.14.3-baidu.100', false], ['1.14.3-baidu.99', false], ['1.14.3-baidu.101', true],
+    ['1.14.4-baidu.1', true], ['1.14.4', true], ['1.14.2-baidu.999', false],
+  ]) assert.equal(installed.include(candidate, 'stable'), expected, candidate);
+  // Other upstream version formats retain their original prerelease semantics.
+  const upstreamBeta = forVersion('1.14.4-beta.1');
+  assert.equal(upstreamBeta.defaultTrack, 'beta');
+  assert.equal(upstreamBeta.include('1.14.3', 'stable'), true);
+  assert.equal(forVersion('1.14.3').defaultTrack, 'stable');
+  assert.equal(forVersion('1.14.3').include('1.14.3', 'stable'), false);
+  assert(source.includes('if (track === "stable" && release.prerelease)'));
 });

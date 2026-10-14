@@ -10,6 +10,8 @@ The fork uses the product name **sing-box Baidu**, application ID
 profile/service data directories, service name `sing-box-baidu-daemon`, and
 separate local pipes. Its update checker reads `iurni/sing-box` Releases. It does
 not replace the official client's installation or update channel.
+Standard `X.Y.Z-baidu.RUN_ID` builds follow the stable channel by default and only
+offer newer versions, while retaining the upstream release-prerelease filter.
 
 ## Signing
 
@@ -61,6 +63,8 @@ changes, vendor changes, and a changed icon digest fail validation. Ignored
 generated output, untracked dashboard build/cache output, and local signing
 settings remain permitted. The read-only theme vendor is checked separately and
 must retain its pinned commit and pristine tracked/untracked contents.
+The parent dashboard dirty marker is excluded only after validating its HEAD and
+index gitlinks and checking the nested sources directly.
 The official package command builds the daemon locally, includes the upstream
 drivers and Cronet library, builds the Rust sharing module, and runs its signing
 and Electron integrity hooks. Verification checks PE AMD64 architecture, the
