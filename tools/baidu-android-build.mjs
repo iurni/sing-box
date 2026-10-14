@@ -85,6 +85,91 @@ export function overlayGradle(text) {
   return text;
 }
 
+export function overlayHookStatusClient(text) {
+  text = text.replaceAll('\r\n', '\n');
+  text = replaceOnce(text, 'import android.content.pm.PackageInfo\n', 'import android.content.pm.PackageInfo\nimport android.os.RemoteException\n', 'optional hook imports');
+  const refresh = `        ConnectivityBinderUtils.withParcel { data, reply ->
+            data.writeInterfaceToken(HookStatusKeys.DESCRIPTOR)
+            val ok = binder.transact(HookStatusKeys.TRANSACTION_STATUS, data, reply, 0)
+            if (!ok) {
+                statusFlow.value = null
+                return
+            }
+            reply.readException()
+            statusFlow.value = Status(
+                active = reply.readInt() != 0,
+                lastPatchedAt = reply.readLong(),
+                version = reply.readInt(),
+                systemPid = reply.readInt(),
+            )
+        }`;
+  const packages = `        return ConnectivityBinderUtils.withParcel { data, reply ->
+            data.writeInterfaceToken(HookStatusKeys.DESCRIPTOR)
+            data.writeLong(flags)
+            data.writeInt(userId)
+            val ok = binder.transact(HookStatusKeys.TRANSACTION_GET_INSTALLED_PACKAGES, data, reply, 0)
+            if (!ok) return@withParcel null
+            reply.readException()
+            val slice = ParceledListSlice.CREATOR.createFromParcel(reply, PackageInfo::class.java.classLoader)
+            @Suppress("UNCHECKED_CAST")
+            (slice as ParceledListSlice<PackageInfo>).list
+        }`;
+  const indent = block => block.split('\n').map(line => `    ${line}`).join('\n');
+  text = replaceOnce(text, refresh, `        optionalHook {\n${indent(refresh)}\n        }`, 'optional hook status IPC');
+  text = replaceOnce(text, packages, `        return optionalHook {\n${indent(packages.replace('        return ', '        '))}\n        }`, 'optional hook package IPC');
+  // The official module may reject this fork's separate application ID. Treat
+  // only IPC permission/transport failures as an unavailable optional hook.
+  // Keep withParcel unchanged so its finally block always recycles both parcels.
+  text = replaceOnce(text, '    }\n}\n', `    }
+
+    private inline fun <T> optionalHook(block: () -> T): T? = try {
+        block()
+    } catch (_: SecurityException) {
+        statusFlow.value = null
+        null
+    } catch (_: RemoteException) {
+        statusFlow.value = null
+        null
+    }
+}
+`, 'optional hook fallback');
+  return text;
+}
+
+export function overlayHookErrorClient(text) {
+  text = text.replaceAll('\r\n', '\n');
+  const query = `        return ConnectivityBinderUtils.withParcel { data, reply ->
+            data.writeInterfaceToken(HookStatusKeys.DESCRIPTOR)
+            if (!binder.transact(HookStatusKeys.TRANSACTION_GET_ERRORS, data, reply, 0)) {
+                return@withParcel failureResult(Failure.TRANSACTION_FAILED)
+            }
+            try {
+                reply.readException()
+            } catch (e: RemoteException) {
+                return@withParcel failureResult(Failure.REMOTE_ERROR, e.message)
+            }
+            if (reply.dataAvail() < 4) {
+                return@withParcel failureResult(Failure.PROTOCOL_ERROR, "reply too short: \${reply.dataAvail()}")
+            }
+            val hasWarnings = reply.readInt() != 0
+            val slice = ParceledListSlice.CREATOR.createFromParcel(reply, LogEntry::class.java.classLoader)
+            @Suppress("UNCHECKED_CAST")
+            Result(logs = slice.list as List<LogEntry>, hasWarnings = hasWarnings)
+        }`;
+  const block = query.replace('        return ', '        ').replace(`            try {
+                reply.readException()
+            } catch (e: RemoteException) {
+                return@withParcel failureResult(Failure.REMOTE_ERROR, e.message)
+            }`, '            reply.readException()');
+  return replaceOnce(text, query, `        return try {
+${block.split('\n').map(line => `    ${line}`).join('\n')}
+        } catch (e: SecurityException) {
+            failureResult(Failure.REMOTE_ERROR, e.message)
+        } catch (e: RemoteException) {
+            failureResult(Failure.REMOTE_ERROR, e.message)
+        }`, 'optional hook error IPC');
+}
+
 export function androidUpdateChecker() {
   return `package io.nekohasekai.sfa.vendor
 
@@ -233,6 +318,10 @@ function pinnedClient(root) {
 function overlayClient(client, version, versionCode) {
   const gradlePath = join(client.directory, 'app/build.gradle.kts');
   writeFileSync(gradlePath, overlayGradle(readFileSync(gradlePath, 'utf8')));
+  const hookPath = join(client.directory, 'app/src/main/java/io/nekohasekai/sfa/utils/HookStatusClient.kt');
+  writeFileSync(hookPath, overlayHookStatusClient(readFileSync(hookPath, 'utf8')));
+  const hookErrorPath = join(client.directory, 'app/src/main/java/io/nekohasekai/sfa/utils/HookErrorClient.kt');
+  writeFileSync(hookErrorPath, overlayHookErrorClient(readFileSync(hookErrorPath, 'utf8')));
   const resources = join(client.directory, 'app/src/main/res');
   for (const entry of readdirSync(resources)) {
     const strings = join(resources, entry, 'strings.xml');

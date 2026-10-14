@@ -16,6 +16,19 @@ editor. Import and editor validation use the bundled custom `Libbox.checkConfig`
 the modern editor obtains its schema from that same core, so the `baidu` outbound
 is recognized without an additional node form or client schema patch.
 
+An active official SFA Xposed module can reject the fork's separate application
+ID during the optional hook status query. On the affected Xiaomi 15, the startup
+log showed `SecurityException: unauthorized` from `HookStatusClient.refresh`,
+before the VPN was started. The client overlay treats a `SecurityException` or
+`RemoteException` from hook status and package-list IPC as an unavailable hook:
+it clears the hook status and returns the existing nullable fallback result.
+Normal profile and VPN operation can continue without that optional module.
+Module error-log IPC returns its existing `REMOTE_ERROR` result for these same
+two exceptions. The overlay preserves parcel cleanup and the module's caller
+authorization based on the caller UID's package names; other exceptions are not
+suppressed. The custom application does not gain access to the official module's
+privileged features through this fallback.
+
 The release signing key is persistent. Actions reads the keystore from
 `BAIDU_ANDROID_KEYSTORE_BASE64`, with `BAIDU_ANDROID_STORE_PASSWORD`,
 `BAIDU_ANDROID_KEY_ALIAS`, and `BAIDU_ANDROID_KEY_PASSWORD` as repository secrets.

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { overlayGradle, readAndroidRequirements, validateGoToolchain, validateBadging, validateNativeCore, validateSignature, androidUpdateChecker, APP_ID } from './baidu-android-build.mjs';
+import { overlayGradle, overlayHookStatusClient, overlayHookErrorClient, readAndroidRequirements, validateGoToolchain, validateBadging, validateNativeCore, validateSignature, androidUpdateChecker, APP_ID } from './baidu-android-build.mjs';
 
 test('SDK requirements provide an integer platform for gomobile alongside the GUI compile SDK', () => {
   const client = mkdtempSync(join(tmpdir(), 'baidu-android-sdk-fixture-'));
@@ -55,6 +55,45 @@ test('Android overlay uses a separate app ID and removes all non-arm64 outputs',
   assert.match(patched, /isUniversalApk = false/);
   assert.doesNotMatch(patched, /armeabi-v7a|x86/);
   assert.throws(() => overlayGradle(upstream.replace('isUniversalApk = true', 'isUniversalApk = false')), /changed/);
+});
+
+test('Optional official hook rejection is limited to IPC failures and keeps both parcel scopes', () => {
+  const upstream = readFileSync(new URL('./fixtures/HookStatusClient.kt', import.meta.url), 'utf8');
+  const patched = overlayHookStatusClient(upstream);
+  assert.equal((patched.match(/ConnectivityBinderUtils\.withParcel \{ data, reply ->/g) || []).length, 2);
+  assert.equal((patched.match(/optionalHook \{/g) || []).length, 2);
+  assert.deepEqual([...patched.matchAll(/catch \(_: ([^)]+)\)/g)].map(match => match[1]), ['SecurityException', 'RemoteException']);
+  for (const exception of ['SecurityException', 'RemoteException'])
+    assert.match(patched, new RegExp(`catch \\(_: ${exception}\\) \\{\\n        statusFlow\\.value = null\\n        null\\n    \\}`));
+  for (const transaction of ['TRANSACTION_STATUS', 'TRANSACTION_GET_INSTALLED_PACKAGES'])
+    assert.equal((patched.match(new RegExp(transaction, 'g')) || []).length, 1);
+  assert.match(patched, /if \(!ok\) \{\n\s+statusFlow\.value = null\n\s+return\n\s+\}/);
+  assert.match(patched, /if \(!ok\) return@withParcel null/);
+  assert.equal((patched.match(/reply\.readException\(\)/g) || []).length, 2);
+  assert.doesNotMatch(patched, /BuildConfig|setCalling|clearCalling|isCallerAllowed/);
+  for (const [from, to] of [
+    ['TRANSACTION_STATUS', 'NEW_TRANSACTION_STATUS'],
+    ['data.writeLong(flags)', 'data.writeLong(flags + 1)'],
+  ]) assert.throws(() => overlayHookStatusClient(upstream.replace(from, to)), /changed; update the build overlay/);
+  assert.throws(() => overlayHookStatusClient(patched), /changed; update the build overlay/);
+});
+
+test('Optional hook error-log IPC preserves result failures and catches transport or permission denial', () => {
+  const upstream = readFileSync(new URL('./fixtures/HookErrorClient.kt', import.meta.url), 'utf8');
+  const patched = overlayHookErrorClient(upstream);
+  assert.deepEqual([...patched.matchAll(/catch \(e: ([^)]+)\)/g)].map(match => match[1]), ['SecurityException', 'RemoteException']);
+  assert.match(patched, /return try \{\n\s+ConnectivityBinderUtils\.withParcel/);
+  assert.equal((patched.match(/failureResult\(Failure\.REMOTE_ERROR, e\.message\)/g) || []).length, 2);
+  assert.equal((patched.match(/reply\.readException\(\)/g) || []).length, 1);
+  for (const unchanged of [
+    '?: return failureResult(Failure.SERVICE_UNAVAILABLE)',
+    'return@withParcel failureResult(Failure.TRANSACTION_FAILED)',
+    'failureResult(Failure.PROTOCOL_ERROR, "reply too short: ${reply.dataAvail()}")',
+    'Result(logs = slice.list as List<LogEntry>, hasWarnings = hasWarnings)',
+  ]) assert.ok(patched.includes(unchanged));
+  assert.doesNotMatch(patched, /BuildConfig|setCalling|clearCalling|isCallerAllowed/);
+  assert.throws(() => overlayHookErrorClient(upstream.replace('TRANSACTION_GET_ERRORS', 'NEW_TRANSACTION_GET_ERRORS')), /changed; update the build overlay/);
+  assert.throws(() => overlayHookErrorClient(patched), /changed; update the build overlay/);
 });
 
 test('APK metadata gate rejects another package, ABI, version or minimum SDK', () => {

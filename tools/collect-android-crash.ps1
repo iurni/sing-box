@@ -49,7 +49,7 @@ if ($lastPid.Success) {
 # Native tombstones are emitted by debuggerd with a different PID. Keep only
 # complete crash sections naming our package rather than other apps' reports.
 $crashBuffer = Read-Adb @('-s', $Serial, 'logcat', '-d', '-b', 'crash', '-v', 'brief')
-$sections = [regex]::Split($crashBuffer, '(?m)(?=^F/(?:libc|AndroidRuntime)\s*\([^)]*\): (?:Fatal signal|FATAL EXCEPTION))')
+$sections = [regex]::Split($crashBuffer, '(?m)(?=^[FE]/(?:libc|AndroidRuntime)\s*\([^)]*\): (?:Fatal signal|FATAL EXCEPTION))')
 $packageMarker = '(?:Cmdline:|Process:|>>>)\s+' + [regex]::Escape($package) + '(?:[,<\s]|$)'
 $appCrashes = @($sections | Where-Object { $_ -match $packageMarker })
 ($appCrashes -join "`n") | Set-Content -LiteralPath (Join-Path $destination 'app-crash-buffer.txt') -Encoding utf8
