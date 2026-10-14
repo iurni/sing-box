@@ -11,6 +11,7 @@ on:
       - 'clients/**'
       - '.gitmodules'
       - 'tools/baidu-*'
+      - 'tools/fixtures/**'
       - '.github/baidu-*'
       - '.github/workflows/baidu-*.yml'
   pull_request:

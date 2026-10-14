@@ -180,14 +180,17 @@ export function validateNativeCore(native, version) {
 }
 
 export function validateSignature(signature, expectedCertificate) {
-  // For v3.1, official apksigner prints certificates with SDK ranges instead
-  // of Signer #1. Every range must retain this fork's persistent identity.
-  const signers = [...signature.matchAll(/^(Signer (?:#\d+|\(minSdkVersion=[^\r\n]+\))) certificate SHA-256 digest: ([0-9a-fA-F]{64})\r?$/gm)];
+  // SDK 37's exact apksigner prints "V2 Signer:" and "V3.0 Signer: (SDK...)".
+  // Older tools use "Signer #1". All printed signing-scheme certificates must
+  // retain this fork's identity; a source-stamp certificate is not an APK signer.
+  const certificateLines = [...signature.matchAll(/^([^\r\n]+) certificate SHA-256 digest: ([0-9a-fA-F]{64})\r?$/gm)];
+  const signers = certificateLines.filter(match => !/^Source Stamp Signer:?$/.test(match[1]));
+  const signerName = /^(?:Signer #1:?|Signer \(minSdkVersion=[^\r\n]+\)|V[12] Signer:|V3\.[01] Signer: \(minSdkVersion=[^\r\n]+\))$/;
   const count = signature.match(/^Number of signers: (\d+)\r?$/m)?.[1];
-  const summary = signature.split(/\r?\n/).filter(line => /^Number of signers:|^Signer .* certificate SHA-256 digest:/.test(line))
+  const summary = signature.split(/\r?\n/).filter(line => /^Number of signers:| certificate SHA-256 digest:/.test(line))
     .map(line => line.slice(0, 300)).slice(0, 8).join(' | ');
   const expected = expectedCertificate.replaceAll(':', '').toLowerCase();
-  if (count !== '1' || signers.length === 0 || signers.some(match => match[2].toLowerCase() !== expected || /^Signer #(?!1$)/.test(match[1])))
+  if (count !== '1' || signers.length === 0 || signers.some(match => match[2].toLowerCase() !== expected || !signerName.test(match[1])))
     throw new Error(`APK signer does not match the persistent fork signing certificate. Expected SHA-256 ${expected}; actual signature metadata: ${summary || '<missing>'}`);
   return expected;
 }

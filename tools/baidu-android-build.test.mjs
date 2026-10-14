@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { overlayGradle, readAndroidRequirements, validateBadging, validateNativeCore, validateSignature, androidUpdateChecker, APP_ID } from './baidu-android-build.mjs';
@@ -76,4 +76,14 @@ test('APK signature gate recognizes v3.1 SDK ranges without accepting a differen
   assert.throws(() => validateSignature(oldOutput.replace('Number of signers: 1', 'Number of signers: 2'), certificate));
   assert.throws(() => validateSignature(`${oldOutput}\nSigner #2 certificate SHA-256 digest: ${certificate}`, certificate));
   assert.throws(() => validateSignature(`Number of signers: 1\nSource Stamp Signer certificate SHA-256 digest: ${certificate}`, certificate));
+});
+
+test('Actual Google SDK 37 output for the official public SFA APK parses its signer fingerprint', () => {
+  const actual = readFileSync(new URL('./fixtures/apksigner-37-official.txt', import.meta.url), 'utf8');
+  const officialFingerprint = '32250a4b5f3a6733df57a3b9ec16c38d2c7fc5f2f693a9636f8f7b3be3549641';
+  assert.equal(validateSignature(actual, officialFingerprint), officialFingerprint);
+  assert.throws(() => validateSignature(actual, '12'.repeat(32)), /V2 Signer: certificate SHA-256 digest/);
+  const sdk37V3 = `${actual}\nV3.0 Signer: (minSdkVersion=28, maxSdkVersion=2147483647) certificate SHA-256 digest: ${officialFingerprint}`;
+  assert.equal(validateSignature(sdk37V3, officialFingerprint), officialFingerprint);
+  assert.throws(() => validateSignature(sdk37V3.replace('V3.0 Signer', 'Unknown Signer'), officialFingerprint));
 });
