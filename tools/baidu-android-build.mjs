@@ -68,9 +68,9 @@ export function overlayGradle(text) {
   text = replaceOnce(text, 'base.archivesName.set("SFA-${versionName}")', 'base.archivesName.set("SFA-Baidu-${versionName}")', 'archive name');
   text = replaceOnce(text, 'include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")', 'include("arm64-v8a")', 'ABI splits');
   text = replaceOnce(text, 'isUniversalApk = true', 'isUniversalApk = false', 'universal APK');
-  // Filter every native dependency as well as libbox. The namespace / Kotlin
-  // package remains upstream's so all generated and handwritten classes match.
-  text = replaceOnce(text, 'targetSdk = ', 'ndk { abiFilters += "arm64-v8a" }\n        targetSdk = ', 'native ABI filter');
+  // AGP rejects defaultConfig.ndk.abiFilters together with ABI splits. The
+  // single ABI split filters native dependencies too; verify the final APK below.
+  // Keep the upstream namespace so generated and handwritten classes match.
   return text;
 }
 

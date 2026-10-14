@@ -130,11 +130,20 @@ export function validateChangedSourceScope(root, state) {
   const rootPaths = state.patches.map(patch => patch.file).filter(file => !file.startsWith(`${CLIENT}/`));
   const clientPaths = state.patches.map(patch => patch.file)
     .filter(file => file.startsWith(`${CLIENT}/`)).map(file => file.slice(CLIENT.length + 1));
-  const changed = directory => git(directory, 'diff', '--ignore-submodules=none', '--name-only', 'HEAD', '--')
+  // A submodule with only untracked build/cache output is reported dirty by
+  // --ignore-submodules=none even when its own tracked diff is empty. This gate
+  // binds tracked source changes; check the read-only theme vendor separately.
+  const changed = directory => git(directory, 'diff', '--ignore-submodules=untracked', '--name-only', 'HEAD', '--')
     .split(/\r?\n/).filter(Boolean).sort();
   if (state.dashboardSource) {
     assert.equal(git(join(root, DASHBOARD), 'rev-parse', 'HEAD'), state.dashboardSource,
       'The pinned dashboard source changed during packaging.');
+    const vendorPath = 'vendor/iterm2-color-schemes';
+    const vendorSource = git(join(root, DASHBOARD), 'ls-tree', 'HEAD', vendorPath).split(/\s+/)[2];
+    assert.equal(git(join(root, DASHBOARD, vendorPath), 'rev-parse', 'HEAD'), vendorSource,
+      'The pinned dashboard theme vendor changed during packaging.');
+    assert.equal(git(join(root, DASHBOARD, vendorPath), 'status', '--porcelain', '--untracked-files=all'), '',
+      'The dashboard theme vendor must remain pristine during packaging.');
     const generated = state.generated || [];
     for (const output of generated) {
       assert.equal(output.file, GENERATED_ICON_PATHS, 'Unexpected declared dashboard generator output.');
@@ -175,7 +184,7 @@ function build(root) {
   // digest; the package command reruns the generator and must reproduce it.
   run(root, 'pnpm', ['-C', DASHBOARD, 'install', '--frozen-lockfile']);
   run(root, 'pnpm', ['-C', DASHBOARD, 'generate']);
-  const dashboardChanges = git(join(root, DASHBOARD), 'diff', '--ignore-submodules=none', '--name-only', 'HEAD', '--')
+  const dashboardChanges = git(join(root, DASHBOARD), 'diff', '--ignore-submodules=untracked', '--name-only', 'HEAD', '--')
     .split(/\r?\n/).filter(Boolean);
   assert(dashboardChanges.every(file => file === 'src/components/iconPaths.ts'),
     `Unexpected dashboard generator changes: ${dashboardChanges.join(', ')}`);

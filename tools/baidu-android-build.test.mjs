@@ -23,7 +23,8 @@ test('Android overlay uses a separate app ID and removes all non-arm64 outputs',
   const upstream = 'applicationId = "io.nekohasekai.sfa"\nbase.archivesName.set("SFA-${versionName}")\ninclude("armeabi-v7a", "arm64-v8a", "x86", "x86_64")\nisUniversalApk = true\ntargetSdk = 37';
   const patched = overlayGradle(upstream);
   assert.match(patched, /applicationId = "io.github.iurni.singbox.baidu"/);
-  assert.match(patched, /ndk \{ abiFilters \+= "arm64-v8a" \}/);
+  assert.match(patched, /include\("arm64-v8a"\)/);
+  assert.doesNotMatch(patched, /abiFilters/);
   assert.match(patched, /isUniversalApk = false/);
   assert.doesNotMatch(patched, /armeabi-v7a|x86/);
   assert.throws(() => overlayGradle(upstream.replace('isUniversalApk = true', 'isUniversalApk = false')), /changed/);

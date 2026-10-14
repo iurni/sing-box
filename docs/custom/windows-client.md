@@ -58,7 +58,9 @@ declared identity/version overlay. The pinned dashboard generator rewrites the
 tracked `src/components/iconPaths.ts`; the build records that command and output
 digest before packaging, then requires packaging to reproduce it. Other dashboard
 changes, vendor changes, and a changed icon digest fail validation. Ignored
-generated output and local signing settings remain permitted.
+generated output, untracked dashboard build/cache output, and local signing
+settings remain permitted. The read-only theme vendor is checked separately and
+must retain its pinned commit and pristine tracked/untracked contents.
 The official package command builds the daemon locally, includes the upstream
 drivers and Cronet library, builds the Rust sharing module, and runs its signing
 and Electron integrity hooks. Verification checks PE AMD64 architecture, the

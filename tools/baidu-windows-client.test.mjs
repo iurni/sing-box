@@ -124,6 +124,12 @@ test('source scope accepts declared overlays and ignored build files but rejects
     writeFileSync(join(client, 'bin/daemon.exe'), 'ignored build\n');
     writeFileSync(join(client, 'signing.local.json'), '{}\n');
     assert.doesNotThrow(() => validateChangedSourceScope(fixture, state));
+    // Reproduce the CI failure: only an untracked generation/cache output makes
+    // the parent report "dashboard" dirty, without any dashboard source diff.
+    writeFileSync(join(dashboard, '.pnpm-generated-state.json'), '{}\n');
+    assert(git(client, 'diff', '--ignore-submodules=none', '--name-only', 'HEAD', '--').includes('dashboard'));
+    assert.equal(git(dashboard, 'diff', '--ignore-submodules=none', '--name-only', 'HEAD', '--').trim(), '');
+    assert.doesNotThrow(() => validateChangedSourceScope(fixture, state));
     const generatedPath = join(dashboard, 'src/components/iconPaths.ts');
     const generatedContent = 'generated icons\n';
     writeFileSync(generatedPath, generatedContent);
@@ -138,8 +144,11 @@ test('source scope accepts declared overlays and ignored build files but rejects
     assert.throws(() => validateChangedSourceScope(fixture, state), /Dashboard tracked changes/);
     writeFileSync(join(dashboard, 'other.ts'), 'original\n');
     writeFileSync(join(vendor, 'colors.json'), '{"tampered":true}\n');
-    assert.throws(() => validateChangedSourceScope(fixture, state), /Dashboard tracked changes/);
+    assert.throws(() => validateChangedSourceScope(fixture, state), /theme vendor must remain pristine/);
     writeFileSync(join(vendor, 'colors.json'), '{}\n');
+    writeFileSync(join(vendor, 'untracked-color.json'), '{}\n');
+    assert.throws(() => validateChangedSourceScope(fixture, state), /theme vendor must remain pristine/);
+    rmSync(join(vendor, 'untracked-color.json'));
     writeFileSync(join(fixture, 'other.go'), 'unrelated tracked edit\n');
     assert.throws(() => validateChangedSourceScope(fixture, state), /Root tracked working changes/);
     writeFileSync(join(fixture, 'other.go'), 'original\n');
