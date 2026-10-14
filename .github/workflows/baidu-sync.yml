@@ -13,77 +13,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sync:
+  pipeline:
     if: github.repository == 'iurni/sing-box' && github.ref == 'refs/heads/codex/baidu'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    uses: ./.github/workflows/baidu-apps.yml
     permissions:
       contents: write
-    steps:
-      - name: Check out the current custom branch
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
-        with:
-          ref: codex/baidu
-          fetch-depth: 0
-
-      - name: Prepare the newest official stable merge
-        id: prepare
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          node tools/baidu-sync.mjs --prepare
-
-      # Reading go.mod after the merge lets an upstream stable release update Go.
-      - name: Set up the candidate's Go toolchain
-        if: steps.prepare.outputs.changed == 'true'
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Install loopback test and packaging tools
-        if: steps.prepare.outputs.changed == 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends tcpdump zip
-
-      - name: Test the merge and build every supported custom package
-        if: steps.prepare.outputs.changed == 'true'
-        run: node tools/baidu-build.mjs
-
-      # There is deliberately no always(), continue-on-error, force push, or reset.
-      - name: Publish only the successfully validated candidate
-        if: steps.prepare.outputs.changed == 'true'
-        id: publish
-        run: node tools/baidu-sync.mjs --publish
-
-      # A GITHUB_TOKEN push cannot start the normal push workflow. Therefore this
-      # sync job builds and uploads its own artifacts before it can count as done.
-      - name: Upload packages built from the validated merge
-        if: steps.prepare.outputs.changed == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: baidu-${{ steps.prepare.outputs.tag }}-${{ github.run_id }}
-          path: dist/baidu-packages/*
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Publish a custom release with the checked packages
-        if: steps.prepare.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          UPSTREAM_TAG: ${{ steps.prepare.outputs.tag }}
-          PUBLISHED_COMMIT: ${{ steps.publish.outputs.commit }}
-        run: |
-          gh release create "${UPSTREAM_TAG}-baidu.${GITHUB_RUN_ID}" dist/baidu-packages/* \
-            --target "$PUBLISHED_COMMIT" \
-            --title "sing-box ${UPSTREAM_TAG} + Baidu" \
-            --notes-file docs/custom/RELEASE-NOTES.md \
-            --latest
-
-      - name: Record sync result
-        if: steps.prepare.outputs.changed == 'false'
-        run: echo 'No newer official stable release; the custom branch was not changed.' >> "$GITHUB_STEP_SUMMARY"
+      actions: read
+    with:
+      sync: true
+      publish_release: true
+    secrets: inherit

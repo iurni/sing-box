@@ -62,9 +62,9 @@ function receipt(f, state, change = {}) {
   // Stand in for baidu-build.mjs's receipt to exercise publication invariants.
   const gitDir = git(f.custom, 'rev-parse', '--absolute-git-dir');
   writeFileSync(join(gitDir, 'baidu-validation.json'), JSON.stringify({
-    schema: 1, success: true, head: state.mergeCommit, tree: git(f.custom, 'rev-parse', 'HEAD^{tree}'),
-    upstreamTag: state.tag, targets: ['linux/amd64', 'windows/amd64', 'android/arm64'],
-    checks: ['sync-fixtures', 'root-go-tests', 'baidu-race-tests', 'config-smoke', 'e2e-loopback'], ...change,
+    schema: 2, success: true, head: state.mergeCommit, tree: git(f.custom, 'rev-parse', 'HEAD^{tree}'),
+    upstreamTag: state.tag, targets: ['linux/amd64', 'windows/amd64', 'android/arm64', 'windows/amd64-gui', 'android/arm64-v8a'],
+    checks: ['sync-fixtures', 'pipeline-fixtures', 'root-go-tests', 'baidu-race-tests', 'config-smoke', 'e2e-loopback', 'windows-client-signed', 'android-client-signed'], ...change,
   }));
 }
 
@@ -217,42 +217,14 @@ test('dirty or wrong-branch local checkouts stop before preparing a merge', t =>
   assert.throws(() => candidate(f), /baidu branch/);
 });
 
-test('release recovery verifies the exact commit and rejects changed archive data', t => {
-  const f = fixture(t);
-  mkdirSync(join(f.custom, 'tools'));
-  copyFileSync(new URL('./baidu-sync.mjs', import.meta.url), join(f.custom, 'tools/baidu-sync.mjs'));
-  git(f.custom, 'add', 'tools/baidu-sync.mjs'); git(f.custom, 'commit', '-m', 'Validation helper');
-  const head = git(f.custom, 'rev-parse', 'HEAD');
-  const tree = git(f.custom, 'rev-parse', 'HEAD^{tree}');
-  const directory = join(f.custom, 'dist/baidu-packages');
-  mkdirSync(directory, { recursive: true });
-  const artifacts = ['linux-amd64.tar.gz', 'windows-amd64.zip', 'android-arm64.tar.gz'].map(target => {
-    const filename = `sing-box-1.0.0-baidu.fixture-${target}`;
-    const bytes = Buffer.from(`fixture archive ${target}`);
-    writeFileSync(join(directory, filename), bytes);
-    return { filename, sha256: createHash('sha256').update(bytes).digest('hex') };
-  });
-  const manifest = { schema: 1, success: true, head, tree, upstreamTag: 'v1.0.0', artifacts,
-    targets: ['linux/amd64', 'windows/amd64', 'android/arm64'],
-    checks: ['sync-fixtures', 'root-go-tests', 'baidu-race-tests', 'config-smoke', 'e2e-loopback'] };
-  const manifestPath = join(directory, 'VALIDATION.json');
-  writeFileSync(manifestPath, JSON.stringify(manifest));
-  writeFileSync(join(directory, 'SHA256SUMS'), artifacts.map(item => `${item.sha256}  ${item.filename}\n`).join(''));
-  const workflow = readFileSync(new URL('../.github/workflows/baidu-build.yml', import.meta.url), 'utf8');
-  const match = /node --input-type=module <<'NODE'[^\n]*\n([\s\S]*?)^\s*NODE\s*$/m.exec(workflow);
-  assert(match, 'the release provenance gate must remain in the workflow');
-  const lines = match[1].split(/\r?\n/);
-  const indent = Math.min(...lines.filter(line => line.trim()).map(line => /^\s*/.exec(line)[0].length));
-  const script = lines.map(line => line.slice(indent)).join('\n');
-  const check = () => spawnSync(process.execPath, ['--input-type=module', '-e', script], {
-    cwd: f.custom, env: { ...process.env, GITHUB_SHA: head }, encoding: 'utf8',
-  });
-  const valid = check();
-  assert.equal(valid.status, 0, valid.stderr);
-  assert.equal(valid.stdout.trim(), 'upstream_tag=v1.0.0');
-  writeFileSync(manifestPath, JSON.stringify({ ...manifest, head: '0'.repeat(40) }));
-  assert.notEqual(check().status, 0, 'artifacts from another commit must not pass');
-  writeFileSync(manifestPath, JSON.stringify(manifest));
-  writeFileSync(join(directory, artifacts[0].filename), 'changed after validation');
-  assert.notEqual(check().status, 0, 'changed archive bytes must not pass');
+test('the old core-only success receipt cannot publish without both signed client builds', t => {
+  const f = fixture(t); nextRelease(f);
+  const state = candidate(f);
+  receipt(f, state, { schema: 1 });
+  assert.throws(() => publish({ cwd: f.custom }), /Invalid sync state/);
+  receipt(f, state, { targets: ['linux/amd64', 'windows/amd64', 'android/arm64'] });
+  assert.throws(() => publish({ cwd: f.custom }), /every required check/);
+  receipt(f, state, { checks: ['sync-fixtures', 'root-go-tests', 'baidu-race-tests', 'config-smoke', 'e2e-loopback'] });
+  assert.throws(() => publish({ cwd: f.custom }), /every required check/);
+  assert.equal(remoteHead(f), f.base);
 });

@@ -147,7 +147,7 @@ export function publish({ cwd = process.cwd(), origin = 'origin' } = {}) {
     throw new Error('A prepared sync and successful validation receipt are required; no branch was pushed.');
   const state = JSON.parse(readFileSync(filePaths.state, 'utf8'));
   const receipt = JSON.parse(readFileSync(filePaths.receipt, 'utf8'));
-  if (state.schema !== 1 || state.branch !== TARGET_BRANCH || receipt.schema !== 1 || receipt.success !== true)
+  if (state.schema !== 1 || state.branch !== TARGET_BRANCH || receipt.schema !== 2 || receipt.success !== true)
     throw new Error('Invalid sync state or validation receipt.');
   const head = command('git', ['rev-parse', 'HEAD'], cwd);
   const tree = command('git', ['rev-parse', 'HEAD^{tree}'], cwd);
@@ -156,8 +156,8 @@ export function publish({ cwd = process.cwd(), origin = 'origin' } = {}) {
     throw new Error('Candidate changed after validation; no branch was pushed.');
   if (command('git', ['status', '--porcelain'], cwd))
     throw new Error('Candidate checkout must remain clean after validation; no branch was pushed.');
-  if (receipt.targets?.join(',') !== 'linux/amd64,windows/amd64,android/arm64' ||
-      receipt.checks?.join(',') !== 'sync-fixtures,root-go-tests,baidu-race-tests,config-smoke,e2e-loopback')
+  if (receipt.targets?.join(',') !== 'linux/amd64,windows/amd64,android/arm64,windows/amd64-gui,android/arm64-v8a' ||
+      receipt.checks?.join(',') !== 'sync-fixtures,pipeline-fixtures,root-go-tests,baidu-race-tests,config-smoke,e2e-loopback,windows-client-signed,android-client-signed')
     throw new Error('Validation did not include every required check and target.');
   const remoteHead = command('git', ['ls-remote', '--exit-code', origin, `refs/heads/${TARGET_BRANCH}`], cwd).split(/\s+/)[0];
   if (remoteHead !== state.base) throw new Error('Remote custom branch advanced while checks ran; stop and rerun from its latest commit.');

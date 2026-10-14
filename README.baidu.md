@@ -10,9 +10,19 @@
 
 ## 获取与测试
 
-从本仓库的 Releases 下载 Windows amd64 或 Android arm64 核心。
-Actions 的 `Baidu - test and build` 也可以手动执行，生成包含校验值的构建包。
-Android 包是命令行核心，不是 APK；官方客户端内置的核心不会因此自动改变。
+从本仓库的 Releases 下载可安装的图形客户端：
+
+- `SFW-<版本>-x64.exe`：Windows amd64 安装程序，应用名称 `sing-box Baidu`。
+- `SFA-Baidu-<版本>-arm64-v8a.apk`：Android arm64-v8a 安装包，应用名称 `SFA Baidu`，最低 Android 7。
+
+两者都内置本分支的 `baidu` 出站，使用固定的私人签名，支持后续同签名更新。
+安装身份及配置独立，可与官方客户端并存；在应用中导入自己的完整 JSON 配置即可。
+Windows 自签证书属于本 fork，首次安装可能有未知发行者提示。
+详情见 [Windows 客户端](docs/custom/windows-client.md) 和 [Android APK](docs/custom/android-apk.md)。
+
+原有命令行核心压缩包也保留。下面的命令示例使用 ZIP 里的命令行 `sing-box.exe`。
+Actions 的 `Baidu - test and build apps` 支持手动构建两个客户端；勾选 `publish_release` 后，
+全部验证通过才发布完整下载包。
 
 下面是只监听本机的最小测试配置，使用前填入自己的网关和凭据：
 
@@ -61,6 +71,6 @@ curl.exe --proxy http://127.0.0.1:18849 --connect-timeout 10 --max-time 30 -I ht
 这些测试不请求公共网关；实际可用性仍取决于网关、凭据和接入网络。
 仓库和构建包不包含用户模块里的凭据，也不分发其中未知的二进制。
 
-自动同步只跟随官方稳定版，合并冲突、测试或任一目标构建失败时停止，保留当前分支。
+自动同步只跟随官方稳定版，合并冲突、测试或任一核心、客户端构建或签名检查失败时停止，保留当前分支。
 时间、手动触发方法和失败处理见
 [维护说明](docs/custom/BAIDU-MAINTENANCE.md)。

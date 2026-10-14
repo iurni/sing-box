@@ -1,0 +1,357 @@
+name: Baidu - exact source core and signed apps
+
+on:
+  workflow_call:
+    inputs:
+      sync:
+        type: boolean
+        required: true
+      publish_release:
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      changed: ${{ steps.decision.outputs.changed }}
+      source_sha: ${{ steps.bundle.outputs.source_sha }}
+      upstream_tag: ${{ steps.bundle.outputs.upstream_tag }}
+      app_version: ${{ steps.bundle.outputs.app_version }}
+      version_code: ${{ steps.bundle.outputs.version_code }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Check out the trigger source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ${{ inputs.sync && 'codex/baidu' || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Use Node 24 for pipeline helpers
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Prepare a stable candidate without pushing
+        id: merge
+        if: inputs.sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          node tools/baidu-sync.mjs --prepare
+      - name: Decide whether all builders are needed
+        id: decision
+        env:
+          SYNC: ${{ inputs.sync }}
+          MERGE_CHANGED: ${{ steps.merge.outputs.changed }}
+        run: |
+          if [ "$SYNC" = true ]; then
+            echo "changed=$MERGE_CHANGED" >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Export the exact committed source for every builder
+        id: bundle
+        if: steps.decision.outputs.changed == 'true'
+        run: node tools/baidu-pipeline.mjs export --directory "$RUNNER_TEMP/baidu-candidate"
+      - name: Upload the candidate and its source identity
+        id: upload
+        if: steps.decision.outputs.changed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: baidu-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/baidu-candidate/*
+          if-no-files-found: error
+          retention-days: 3
+      - name: Record an already current stable release
+        if: steps.decision.outputs.changed == 'false'
+        run: echo 'No newer official stable release. The custom branch is unchanged.' >> "$GITHUB_STEP_SUMMARY"
+
+  core:
+    needs: prepare
+    if: needs.prepare.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - name: Download this run's prepared source
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/baidu-candidate
+      - name: Import and verify the exact candidate
+        env:
+          EXPECTED_HEAD: ${{ needs.prepare.outputs.source_sha }}
+        run: node tools/baidu-pipeline.mjs import --directory "$RUNNER_TEMP/baidu-candidate" --expected-head "$EXPECTED_HEAD" --expected-run-id "$GITHUB_RUN_ID"
+      - name: Set up the merged core's Go toolchain
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install loopback and packaging tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends tcpdump zip
+      - name: Test the core and build the three CLI packages
+        run: node tools/baidu-build.mjs
+      - name: Upload validated core packages
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: baidu-core-${{ github.run_id }}
+          path: dist/baidu-packages/*
+          if-no-files-found: error
+          retention-days: 30
+
+  android:
+    needs: prepare
+    # Pull requests never receive signing keys. Trusted builds use the default
+    # custom branch and its exact prepared source, never a floating app branch.
+    if: >-
+      needs.prepare.outputs.changed == 'true' && github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/codex/baidu' && github.event.repository.default_branch == 'codex/baidu'
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/baidu-candidate
+      - name: Import and verify the exact candidate
+        env:
+          EXPECTED_HEAD: ${{ needs.prepare.outputs.source_sha }}
+        run: node tools/baidu-pipeline.mjs import --directory "$RUNNER_TEMP/baidu-candidate" --expected-head "$EXPECTED_HEAD" --expected-run-id "$GITHUB_RUN_ID"
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - name: Read the pinned official client's Android requirements
+        id: android-sdk
+        run: node tools/baidu-android-build.mjs requirements
+      - name: Install the client's exact SDK and NDK packages
+        env:
+          SDK_PACKAGES: ${{ steps.android-sdk.outputs.sdk_packages }}
+        run: |
+          read -r -a packages <<< "$SDK_PACKAGES"
+          sdkmanager "${packages[@]}"
+      - name: Check the Android packaging fixtures
+        run: node --test tools/baidu-android-build.test.mjs
+      - name: Build, sign, and verify the arm64-v8a APK
+        env:
+          BAIDU_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+          BAIDU_ANDROID_VERSION_CODE: ${{ needs.prepare.outputs.version_code }}
+          BAIDU_ANDROID_KEYSTORE_BASE64: ${{ secrets.BAIDU_ANDROID_KEYSTORE_BASE64 }}
+          BAIDU_ANDROID_STORE_PASSWORD: ${{ secrets.BAIDU_ANDROID_STORE_PASSWORD }}
+          BAIDU_ANDROID_KEY_ALIAS: ${{ secrets.BAIDU_ANDROID_KEY_ALIAS }}
+          BAIDU_ANDROID_KEY_PASSWORD: ${{ secrets.BAIDU_ANDROID_KEY_PASSWORD }}
+          BAIDU_ANDROID_CERT_SHA256: ${{ vars.BAIDU_ANDROID_CERT_SHA256 }}
+        run: node tools/baidu-android-build.mjs
+      - name: Upload only the checked APK and provenance
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: baidu-android-${{ github.run_id }}
+          path: dist/baidu-android-packages/*
+          if-no-files-found: error
+          retention-days: 30
+
+  windows:
+    needs: prepare
+    if: >-
+      needs.prepare.outputs.changed == 'true' && github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/codex/baidu' && github.event.repository.default_branch == 'codex/baidu'
+    runs-on: windows-latest
+    timeout-minutes: 100
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/baidu-candidate
+      - name: Import and verify the exact candidate
+        env:
+          EXPECTED_HEAD: ${{ needs.prepare.outputs.source_sha }}
+        run: node tools/baidu-pipeline.mjs import --directory "$env:RUNNER_TEMP/baidu-candidate" --expected-head "$env:EXPECTED_HEAD" --expected-run-id "$env:GITHUB_RUN_ID"
+      - name: Initialize the pinned desktop client and its dashboard
+        run: git submodule update --init --recursive clients/desktop
+      - name: Check the Windows packaging fixtures against pristine sources
+        run: node --test tools/baidu-windows-client.test.mjs
+      - name: Prepare the custom Windows client and read its toolchain
+        id: desktop
+        env:
+          APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+        run: node tools/baidu-windows-client.mjs prepare --version "$env:APP_VERSION"
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ steps.desktop.outputs.go_version }}
+          cache: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ steps.desktop.outputs.node_version }}
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          package_json_file: clients/desktop/package.json
+          run_install: false
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
+        with:
+          toolchain: ${{ steps.desktop.outputs.rust_version }}
+          targets: x86_64-pc-windows-msvc
+      - name: Prepare persistent signing with its pinned certificate
+        env:
+          BAIDU_WINDOWS_PFX_BASE64: ${{ secrets.BAIDU_WINDOWS_PFX_BASE64 }}
+          BAIDU_WINDOWS_PFX_PASSWORD: ${{ secrets.BAIDU_WINDOWS_PFX_PASSWORD }}
+          BAIDU_WINDOWS_CERT_SHA256: ${{ vars.BAIDU_WINDOWS_CERT_SHA256 }}
+        run: ./tools/baidu-windows-signing.ps1
+      - name: Build the Windows amd64 installer
+        run: node tools/baidu-windows-client.mjs build
+      - name: Verify executable architecture, custom core, and signatures
+        env:
+          BAIDU_WINDOWS_CERT_SHA256: ${{ vars.BAIDU_WINDOWS_CERT_SHA256 }}
+        run: node tools/baidu-windows-client.mjs verify
+      - name: Upload only the checked installer and provenance
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: baidu-windows-${{ github.run_id }}
+          path: dist/baidu-windows-packages/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Remove runner-local signing material
+        if: always()
+        shell: pwsh
+        run: |
+          $settingsPath = 'clients/desktop/signing.local.json'
+          if (Test-Path -LiteralPath $settingsPath) {
+            $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+            $certificatePath = [IO.Path]::GetFullPath($settings.windows.certificateFile)
+            $temporaryRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP).TrimEnd('\') + '\'
+            if ($certificatePath.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase) -and
+                [IO.Path]::GetFileName($certificatePath) -match '^baidu-signing-[a-f0-9]{32}\.pfx$') {
+              Remove-Item -LiteralPath $certificatePath -Force -ErrorAction SilentlyContinue
+            }
+          }
+          Remove-Item -LiteralPath 'clients/desktop/signing.local.json' -Force -ErrorAction SilentlyContinue
+
+  publish:
+    name: Join all gates and optionally publish exact source
+    needs: [prepare, core, android, windows]
+    # No always(): a failed/skipped app builder cannot update the branch or Release.
+    if: >-
+      github.event_name != 'pull_request' && github.ref == 'refs/heads/codex/baidu' &&
+      github.event.repository.default_branch == 'codex/baidu'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          # Only this trusted job gets Git credentials for the final normal push.
+          persist-credentials: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/baidu-candidate
+      - name: Import the same source that every builder verified
+        env:
+          EXPECTED_HEAD: ${{ needs.prepare.outputs.source_sha }}
+        run: node tools/baidu-pipeline.mjs import --directory "$RUNNER_TEMP/baidu-candidate" --expected-head "$EXPECTED_HEAD" --expected-run-id "$GITHUB_RUN_ID"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.core.outputs.artifact_id }}
+          merge-multiple: true
+          path: dist/baidu-receipts/core
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.android.outputs.artifact_id }}
+          merge-multiple: true
+          path: dist/baidu-receipts/android
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.windows.outputs.artifact_id }}
+          merge-multiple: true
+          path: dist/baidu-receipts/windows
+      - name: Join successful source, signature, and checksum gates
+        id: verified
+        env:
+          BAIDU_WINDOWS_CERT_SHA256: ${{ vars.BAIDU_WINDOWS_CERT_SHA256 }}
+          BAIDU_ANDROID_CERT_SHA256: ${{ vars.BAIDU_ANDROID_CERT_SHA256 }}
+        run: |
+          node tools/baidu-pipeline.mjs collect \
+            --core-directory dist/baidu-receipts/core \
+            --android-directory dist/baidu-receipts/android \
+            --windows-directory dist/baidu-receipts/windows \
+            --directory dist/baidu-release
+          (cd dist/baidu-release && sha256sum -c SHA256SUMS)
+      - name: Retain the complete verified app release artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: baidu-signed-apps-${{ github.run_id }}
+          path: dist/baidu-release/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Advance the branch after every core and app build passes
+        if: inputs.sync
+        run: node tools/baidu-sync.mjs --publish
+      - name: Publish checked installers and CLI archives
+        if: inputs.publish_release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EXPECTED_HEAD: ${{ needs.prepare.outputs.source_sha }}
+          UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
+        run: |
+          node tools/baidu-pipeline.mjs verify --directory dist/baidu-release
+          remote_head=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/codex/baidu" --jq '.object.sha')
+          test "$remote_head" = "$EXPECTED_HEAD"
+          gh release create "${UPSTREAM_TAG}-baidu.${GITHUB_RUN_ID}" dist/baidu-release/* \
+            --target "$EXPECTED_HEAD" \
+            --title "sing-box ${UPSTREAM_TAG} + Baidu apps" \
+            --notes-file docs/custom/RELEASE-NOTES.md \
+            --latest

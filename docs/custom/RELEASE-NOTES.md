@@ -1,10 +1,12 @@
-此版本从正式稳定版的源码合并、测试和构建，增加定制的 `baidu` TCP 出站。
+本版本由官方正式稳定版及百度出站补丁的源码构建，提供上游图形界面的定制安装包：
 
-- Windows amd64：下载 ZIP 中的 `sing-box.exe`。
-- Android arm64：下载 tar.gz 中的 `sing-box` 命令行核心；不是 Android App 安装包。
-- Linux amd64：用于命令行使用和复现 CI。
-- 每个附件对应的 SHA256 值见 `SHA256SUMS`；Go 版本、构建标签和源码提交见 `BUILD-INFO.json`。
+- Windows amd64：下载 `SFW-…-x64.exe` 安装图形客户端，包含本 fork 的百度 daemon。
+- Android arm64-v8a：下载 `SFA-Baidu-…-arm64-v8a.apk`，最低 Android 7，包含本 fork 的 libbox。
+- 原有 Windows / Android / Linux 命令行核心压缩包仍保留。
+- SHA256 值见 `SHA256SUMS`；核心与客户端源码提交、签名证书指纹、检查记录见 `VALIDATION.json` 及三个平台的验证 JSON。
 
-发布前已通过上游根模块 Go 测试、百度出站 race 测试、配置检查和真实编译核心的回环模拟网关测试。二进制沿用该上游版本 `DEFAULT_BUILD_TAGS_OTHERS` 的非 Naive 功能集合。
+客户端采用独立的安装和配置身份，可保留官方客户端。Android 使用持久自有签名，可由之后的本 fork APK 更新；Windows 使用持久自签证书，首次安装可能出现未知发行者或 SmartScreen 提示。GUI、daemon 和原有安全校验保持启用。
 
-附件不含真实凭据或原模块的预编译内核。模拟网关通过不代表真实百度入口一直可用，也不能证明运营商计费效果。配置字段及维护说明见仓库中的定制协议文档和 `docs/custom/BAIDU-MAINTENANCE.md`。
+发布前所有核心测试与模拟网关验证、Windows 原生构建/签名/daemon 校验、Android APK 签名/身份/架构验证均须通过；任一项失败均停止稳定版同步和发布。附件不含签名私钥、真实节点凭据或原 ATP 模块的预编译内核。
+
+模拟网关验证不代表真实百度入口始终可用，也不证明任何运营商计费效果。配置字段及维护流程见定制协议文档和 `docs/custom/BAIDU-MAINTENANCE.md`。

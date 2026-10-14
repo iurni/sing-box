@@ -45,6 +45,7 @@ try {
   const goHost = { GOOS: 'linux', GOARCH: 'amd64', CGO_ENABLED: '1', GOTOOLCHAIN: 'local' };
 
   run(process.execPath, ['--test', 'tools/baidu-sync.test.mjs']);
+  run(process.execPath, ['--test', 'tools/baidu-pipeline.test.mjs']);
   // Same root-module coverage as upstream .github/workflows/test.yml. The separate
   // test/ module needs Docker/services and is deliberately outside this small CI.
   const rootArgs = ['test', '-v', '-count=1', '-timeout=15m', '-exec', 'sudo', '-tags', tags, '-ldflags', sharedFlags, './...'];
@@ -96,7 +97,7 @@ try {
     throw new Error('Tracked sources changed during validation; no success receipt was written.');
   writeFileSync(join(packageRoot, 'SHA256SUMS'), artifacts.map(item => `${item.sha256}  ${item.filename}\n`).join(''));
   const receipt = { schema: 1, success: true, head, tree, upstreamTag, version,
-    checks: ['sync-fixtures', 'root-go-tests', 'baidu-race-tests', 'config-smoke', 'e2e-loopback'],
+    checks: ['sync-fixtures', 'pipeline-fixtures', 'root-go-tests', 'baidu-race-tests', 'config-smoke', 'e2e-loopback'],
     targets: targets.map(target => `${target.os}/${target.arch}`), artifacts };
   writeFileSync(join(packageRoot, 'VALIDATION.json'), `${JSON.stringify(receipt, null, 2)}\n`);
   writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });

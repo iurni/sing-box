@@ -1,4 +1,4 @@
-name: Baidu - test and build
+name: Baidu - test and build apps
 
 on:
   push:
@@ -8,6 +8,8 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'release/**'
+      - 'clients/**'
+      - '.gitmodules'
       - 'tools/baidu-*'
       - '.github/baidu-*'
       - '.github/workflows/baidu-*.yml'
@@ -16,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_release:
-        description: 'Rebuild, verify, and publish a custom Release from the default branch'
+        description: 'Build and verify both signed apps, then publish from the default branch'
         type: boolean
         required: false
         default: false
@@ -29,112 +31,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  pipeline:
     if: github.repository == 'iurni/sing-box'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    outputs:
-      artifact_id: ${{ steps.artifact.outputs.artifact-id }}
-    steps:
-      - name: Check out source
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Set up Go from this checkout
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Install loopback test and packaging tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends tcpdump zip
-
-      - name: Run all gates and build the Windows and Android cores
-        run: node tools/baidu-build.mjs
-
-      - name: Upload source-built packages and checksums
-        id: artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: baidu-build-${{ github.sha }}
-          path: dist/baidu-packages/*
-          if-no-files-found: error
-          retention-days: 30
-
-  release:
-    name: Publish manually requested verified Release
-    needs: build
-    if: >-
-      github.repository == 'iurni/sing-box' &&
-      github.event_name == 'workflow_dispatch' && inputs.publish_release &&
-      github.ref == 'refs/heads/codex/baidu' &&
-      github.ref_name == github.event.repository.default_branch
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    uses: ./.github/workflows/baidu-apps.yml
     permissions:
       contents: write
       actions: read
-    steps:
-      - name: Check out exactly the validated source commit
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Download only this run's successful build artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          artifact-ids: ${{ needs.build.outputs.artifact_id }}
-          run-id: ${{ github.run_id }}
-          repository: ${{ github.repository }}
-          github-token: ${{ github.token }}
-          merge-multiple: true
-          path: dist/baidu-packages
-
-      - name: Verify artifact provenance and exact archive checksums
-        id: verified
-        run: |
-          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
-          import assert from 'node:assert/strict';
-          import { createHash } from 'node:crypto';
-          import { readFileSync, readdirSync } from 'node:fs';
-          import { execFileSync } from 'node:child_process';
-          import { stableParts, VERSION_FILE } from './tools/baidu-sync.mjs';
-          const directory = 'dist/baidu-packages';
-          const receipt = JSON.parse(readFileSync(`${directory}/VALIDATION.json`, 'utf8'));
-          assert.equal(receipt.schema, 1);
-          assert.equal(receipt.success, true);
-          assert.equal(receipt.head, process.env.GITHUB_SHA);
-          assert.equal(receipt.tree, execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim());
-          assert.equal(receipt.upstreamTag, readFileSync(VERSION_FILE, 'utf8').trim());
-          stableParts(receipt.upstreamTag);
-          assert.deepEqual(receipt.targets, ['linux/amd64', 'windows/amd64', 'android/arm64']);
-          assert.deepEqual(receipt.checks, ['sync-fixtures', 'root-go-tests', 'baidu-race-tests', 'config-smoke', 'e2e-loopback']);
-          assert.equal(receipt.artifacts.length, 3);
-          for (const artifact of receipt.artifacts) {
-            assert.match(artifact.filename, /^sing-box-[A-Za-z0-9.+-]+-(?:linux|windows|android)-(?:amd64|arm64)\.(?:zip|tar\.gz)$/);
-            assert.match(artifact.sha256, /^[a-f0-9]{64}$/);
-            assert.equal(createHash('sha256').update(readFileSync(`${directory}/${artifact.filename}`)).digest('hex'), artifact.sha256);
-          }
-          assert.deepEqual(readdirSync(directory).sort(), [...receipt.artifacts.map(item => item.filename), 'SHA256SUMS', 'VALIDATION.json'].sort());
-          console.log(`upstream_tag=${receipt.upstreamTag}`);
-          NODE
-          (cd dist/baidu-packages && sha256sum -c SHA256SUMS)
-
-      - name: Publish verified packages without merging or changing the branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          UPSTREAM_TAG: ${{ steps.verified.outputs.upstream_tag }}
-        run: |
-          remote_head=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/codex/baidu" --jq '.object.sha')
-          test "$remote_head" = "$GITHUB_SHA"
-          gh release create "${UPSTREAM_TAG}-baidu.${GITHUB_RUN_ID}" dist/baidu-packages/* \
-            --target "$GITHUB_SHA" \
-            --title "sing-box ${UPSTREAM_TAG} + Baidu" \
-            --notes-file docs/custom/RELEASE-NOTES.md \
-            --latest
+    with:
+      sync: false
+      publish_release: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_release }}
+    secrets: inherit

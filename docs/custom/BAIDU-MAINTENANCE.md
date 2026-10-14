@@ -1,67 +1,72 @@
-# 百度出站分支的更新和构建
+# 百度分支：稳定版同步、Windows GUI 与 Android APK
 
-维护分支和仓库默认分支是 `codex/baidu`。原来的上游分支及工作流保留；两个新增的 `baidu-*.yml` 工作流负责定制功能的测试、构建与更新。当前合入的官方版本记录在 `.github/baidu-upstream-version`，初始值为 `v1.14.3`。
+维护分支和默认分支为 `codex/baidu`。官方稳定版本记录在 `.github/baidu-upstream-version`。自动任务只跟随 `SagerNet/sing-box` 的正式稳定 Release，排除草稿、预发布及非 `vX.Y.Z` 标签。
 
-上游的 Docker、Linux 发布和 Stale 工作流文件仍然保留，但已在本仓库的 Actions 设置中禁用，避免自动构建与本次需求无关的镜像、发布包或管理议题。日常使用这里的两个 Baidu 工作流；如以后需要上游发布功能，可以单独重新启用对应工作流。
+## 下载与安装
 
-## 自动更新
+完整构建同时提供上游界面的两个定制 App：
 
-`Baidu - sync official stable release` 每天检查一次，也可在 GitHub 的 Actions 页面手动运行。时间为 UTC 21:17，即日本时间次日 06:17。GitHub 的定时任务可能延迟；它需要在仓库默认分支上启用 Actions，定时任务才会运行。
+- `SFW-<版本>-x64.exe`：Windows amd64 图形客户端安装程序，包含从本分支源码编译的百度 daemon。
+- `SFA-Baidu-<版本>-arm64-v8a.apk`：Android arm64-v8a 图形客户端，包含本分支 libbox；最低 Android 7。
+- Windows amd64、Android arm64 和 Linux amd64 的原有命令行核心压缩包。
+- `SHA256SUMS`、`VALIDATION.json` 及每个平台的验证记录。
 
-流程只读取 `SagerNet/sing-box` 正式发布的 release：排除草稿、预发布和 `vX.Y.Z` 以外的标签，再按数字版本选取最新版本。多次更新之间不要求逐个手动合并；Git 保留完整历史，一次合并到最新稳定版。
+App 采用独立安装身份、配置目录和更新来源。Android 的应用 ID 和 Windows 的服务、IPC、安装注册表身份独立于官方客户端，可保留原客户端；它们不会自动继承官方客户端的配置。Windows 使用本 fork 的持久自签代码签名证书，首次安装仍可能显示 Windows 的未知发行者或 SmartScreen 提示；签名身份和 daemon 的校验保持启用。Android 也使用持久自有签名，可由后续本 fork APK 原地更新，不能作为官方 APK 的同签更新包。
 
-1. 从当前 `codex/baidu` 创建临时候选分支，合并官方 release 提交。
-2. 如果发生冲突，立即中止合并。远端和原来的 `codex/baidu` 都不会改变。
-3. 使用合并后 `go.mod` 要求的 Go 版本，运行同步脚本的隔离 Git 测试、上游根模块 Go 测试和百度协议的 race 测试。
-4. 从源码构建 Linux amd64、Windows amd64、Android arm64。Linux 构建还会检查仅含回环地址和虚拟凭据的百度配置，并通过本地模拟网关验证实际数据传输。
-5. 版本记录先提交到本地候选分支，构建与验证对应这个确切提交。每一项通过后，才普通推送同一提交到 `codex/baidu`。不使用强推，不重置远端。若测试期间有人更新了远端分支，停止本次推送。
-6. 同一任务上传构建包、SHA256 校验值和验证记录，再创建定制 Release，使用 `vX.Y.Z-baidu.<运行编号>` 的独立标签，并指向通过检查的已推送提交，不覆盖官方标签。
+Windows、Android 的客户端源码固定为候选稳定提交中的 `clients/desktop`、`clients/android` gitlink，不切换到浮动的 main/dev。构建脚本对版本、安装身份及更新源做有明确匹配数量的补丁；上游结构改变时补丁失败，停止同步，等待人工处理。公开验证记录包含客户端提交和补丁摘要，不含任何签名私钥、节点凭据或原 ATP 二进制。
 
-合并、测试或构建失败会保留原来的可用版本，在下一次检查时重新尝试。查看失败任务的日志后处理补丁，不会自动忽略失败。成功验证并推送后，若附件上传或 Release 创建失败，分支已经更新；可以手动重新构建并发布，步骤见下方。GitHub Actions 的工作流设置需要允许 `GITHUB_TOKEN` 写入仓库内容；推送权限被禁止时，更新任务会失败并保持远端不变。没有配置个人访问令牌。
+## 自动稳定版更新
 
-GitHub 不会为 `GITHUB_TOKEN` 的推送再次触发普通 push 工作流，所以同步任务本身已包含全部测试、构建和附件上传，不依赖下游工作流。
+`Baidu - sync official stable release` 每天 UTC 21:17（日本时间次日 06:17）检查，也支持手动运行。GitHub 定时任务可能延迟，需要工作流在默认分支上启用。
 
-## 下载构建
+1. 在干净 checkout 从当前维护分支创建临时候选，正常合并最新稳定版。冲突立即停止，原分支与远端不变。
+2. 候选的版本标记先提交。将这个未推送提交及完整历史导出为 Git bundle，并记录 SHA、tree、运行编号和 SHA256。
+3. Linux 核心、Android App、Windows App 三个独立 job 都导入同一 bundle，验证相同的提交和 tree。Linux 使用候选 `go.mod` 的 Go；Windows 使用固定客户端要求的 Node、pnpm、Go、Rust；Android SDK/NDK 由固定客户端元数据读取。
+4. 核心运行同步和跨 job 验证的隔离 Git 测试、上游根模块 Go 测试、百度 race 测试、配置检查、本地模拟网关端到端测试，并编译三份核心。
+5. Android 编译 libbox，生成仅 arm64-v8a 的 APK，检查 ELF64/AArch64、版本、应用身份、百度协议包含性及持久签名。Windows 原生构建安装 EXE，检查 AMD64、GUI/daemon 版本、源码编译的百度 daemon、产品与包布局、全部组件签名，并用真实上游 daemon 的证书校验逻辑验证自签身份。
+6. 只有三个 job 全部通过，汇总 job 才验证提交、客户端 gitlink、版本、证书指纹和每个附件的 SHA256，生成 schema 2 总验证记录并上传完整安装包集合。
+7. 同步任务普通推送经过验证的同一提交。远端若在构建期间前进，停止推送。不强推，不重置远端，不忽略失败。
+8. 创建独立 `vX.Y.Z-baidu.<运行编号>` Release，目标是已验证提交，保留官方标签。
 
-`Baidu - test and build` 在定制分支的代码或构建脚本改变时运行，也支持手动运行；面向该分支的 pull request 同样只读测试。进入成功任务底部的 Artifacts 下载附件，解开 GitHub 的外层 ZIP 后即可找到：
+任一核心/App 的补丁、测试、编译、签名或验收失败，都不更新维护分支和 Release。旧 schema 1 核心验证记录不能单独批准同步。GitHub 的 `GITHUB_TOKEN` 推送不会再触发普通 push 工作流，所以同步任务自己完成三个构建与发布。原有上游工作流文件保留；本 fork 的 Docker/Linux/Stale 工作流在 Actions 设置中单独禁用，避免运行无关发布任务。
 
-- Windows amd64 的 ZIP，内含 `sing-box.exe`。
-- Android arm64 的 tar.gz，内含命令行核心 `sing-box`，不是 Android App 安装包。
-- Linux amd64 的 tar.gz，便于复现 CI 测试。
-- `SHA256SUMS`、`VALIDATION.json` 和每个包里的 `BUILD-INFO.json`。
+通过全部检查并推送后若 Release 创建失败，分支已经更新；按下方手动恢复重新构建并发布。不会为了恢复附件而重新合并或强推。
 
-Actions 附件默认保留 30 天，可以手动重新构建。自动同步成功后，还会在 GitHub Releases 保留同样的构建附件，并将最新定制 Release 设置为 Latest；Release 标签与官方版本标签分开，也不包含真实的节点凭据或原压缩包的二进制。普通代码 push 和默认的手动构建只上传 Actions 附件。
+## 手动构建与恢复发布
 
-如果需要首次发布，或者同步已经推送但发布附件失败：在 Actions 的 `Baidu - test and build` 页面点击 Run workflow，选择默认分支 `codex/baidu`，勾选 `publish_release` 后运行。它重新完成全部检查和构建，再由独立发布任务下载本次构建的确切附件、验证提交和归档校验值，发布到本次验证的 `github.sha`。若期间分支前进则停止发布，重新运行即可。这个恢复步骤不合并上游，也不修改分支；pull request 和普通 push 永远不会取得该发布任务的写入权限。
+`Baidu - test and build apps` 在维护分支的代码/客户端/构建脚本改变时运行，并上传 Actions 附件，默认不创建 Release。面向维护分支的 pull request 只运行只读核心验证，不取得签名私钥，不运行签名 App 发布。
 
-构建标签每次从候选版本的 `release/DEFAULT_BUILD_TAGS_OTHERS` 读取，链接参数从 `release/LDFLAGS` 读取，沿用上游非 Naive 的功能集合，而不是固定少量协议。当前 Windows 和 Android 命令行核心使用 `CGO_ENABLED=0`；它们是交叉编译检查，并未在 CI 中实测 Android Root/TUN 或 Windows TUN。根模块测试范围与上游 `.github/workflows/test.yml` 相同；独立的 `test/` Docker 集成模块不在这个维护任务中。
+在该工作流页面点击 Run workflow，选择默认分支 `codex/baidu`，勾选 `publish_release`。它重新完成核心、Windows 和 Android 全部验证，下载本次运行的确切附件，检查提交和校验值，再发布。若远端分支已前进则停止，重新运行即可。Artifacts 默认保留 30 天；候选源码 bundle 保留 3 天。
 
-## 本地预检
+## 持久签名材料
 
-Node.js 20 及以上、Git 和已登录的 GitHub CLI 可以在干净的本地 `codex/baidu` 分支上查询更新：
+仓库配置以下 Actions Secrets，正常构建不生成临时签名身份，也不降级为未签名包：
+
+- `BAIDU_ANDROID_KEYSTORE_BASE64`
+- `BAIDU_ANDROID_STORE_PASSWORD`
+- `BAIDU_ANDROID_KEY_ALIAS`
+- `BAIDU_ANDROID_KEY_PASSWORD`
+- `BAIDU_WINDOWS_PFX_BASE64`
+- `BAIDU_WINDOWS_PFX_PASSWORD`
+
+公开 Actions Variables `BAIDU_ANDROID_CERT_SHA256` 和 `BAIDU_WINDOWS_CERT_SHA256` 固定证书 SHA256 指纹。私钥仅在受信任默认分支的 App 构建 job 注入，runner 本地忽略文件用完清理，不进入附件。请保存持久材料的私人备份；随意更换 Android key 会使已有 APK 不能原地升级，更换 Windows key 也会改变 daemon 的签名信任关系。不要把 key/password 提交到仓库。
+
+## 本地检查
+
+在干净维护分支用 Git、Node 24 以上及已登录的 GitHub CLI 查询：
 
 ```sh
 node tools/baidu-sync.mjs --dry-run
 ```
 
-此操作会获取官方 Git 对象以验证版本的历史关系，但不切换分支、不修改配置、不推送。如果要准备合并以供人工检查：
+它只获取官方历史并验证版本关系，不合并、不推送。隔离 Git 测试不访问用户远端：
 
 ```sh
-node tools/baidu-sync.mjs --prepare
+node --test tools/baidu-sync.test.mjs tools/baidu-pipeline.test.mjs
 ```
 
-准备后仍不会推送，当前 checkout 位于候选分支，版本记录已经提交，工作区保持干净。在 Linux amd64 主机上，可安装 Go（版本参见候选 `go.mod`）、C 编译器、sudo、tcpdump、zip 后运行完整检查：
+`node tools/baidu-build.mjs` 仅进行 Linux amd64 环境的核心测试和三平台核心交叉编译，其 schema 1 验证记录不足以批准发布。完整 App 构建及总验证由 `baidu-apps.yml` 在 Ubuntu 和 Windows 原生 runner 执行。
 
-```sh
-node tools/baidu-build.mjs
-```
+核心包功能标签和链接参数从候选上游的 release 文件读取；Windows daemon 沿用客户端所需标签，Android libbox 沿用官方 Android 构建路径。根模块测试范围与上游 `.github/workflows/test.yml` 相同；独立 `test/` Docker 集成模块不包含在本维护任务中。
 
-只有本次候选的全部检查通过并生成匹配的验证记录后，发布步骤才允许执行。通常直接使用 GitHub Actions 手动触发同步即可。本地检查失败时保留候选供诊断；不要丢弃其他未保存修改，可以用新的干净 checkout 再次准备。
-
-同步算法可以离线验证；这些测试只创建临时本地仓库，包含合并冲突、测试失败、构建矩阵缺失、验证后修改和他人并发推送等场景，不访问用户的远端：
-
-```sh
-node --test tools/baidu-sync.test.mjs
-```
-
-这些检查验证补丁的行为和构建兼容性，不保证真实百度网关始终可用，也不能证明任何运营商计费效果。
+构建和模拟测试验证兼容性、签名、包含的源码及协议行为，未在真实手机、Windows TUN 或百度入口上自动联网测试，不证明运营商计费效果。
