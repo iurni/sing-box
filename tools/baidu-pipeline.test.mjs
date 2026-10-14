@@ -62,8 +62,8 @@ function packages(f) {
   const windows = { ...common, version, appSource: desktopCommit, target: 'windows/amd64-gui', signerSHA256: windowsFingerprint, coreContainsBaidu: true,
     checks: ['pinned-sfw-source', 'fork-update-source', 'isolated-installation', 'source-built-baidu-daemon', 'amd64-pe', 'matching-authenticode-signatures', 'installer-product'],
     artifacts: artifacts(windowsDirectory, [`SFW-${version}-x64.exe`]) };
-  const android = { ...common, version, versionCode: 1800000000, appSource: androidCommit, target: 'android/arm64-v8a', signerSHA256: androidFingerprint, coreContainsBaidu: true,
-    checks: ['official-pinned-client', 'custom-libbox-built-from-core', 'apk-assembly', 'apk-signature', 'package-id', 'version-metadata', 'arm64-v8a-only', 'elf64-aarch64-libbox', 'baidu-core-provenance'],
+  const android = { ...common, version, versionCode: 1800000000, appSource: androidCommit, target: 'android/arm64-v8a', signerSHA256: androidFingerprint, coreContainsBaidu: true, goVersion: '1.26.8',
+    checks: ['official-pinned-client', 'official-client-go-toolchain', 'custom-libbox-built-from-core', 'apk-assembly', 'apk-signature', 'package-id', 'version-metadata', 'arm64-v8a-only', 'elf64-aarch64-libbox', 'baidu-core-provenance'],
     artifacts: artifacts(androidDirectory, [`SFA-Baidu-${version}-arm64-v8a.apk`, 'SFA-version-metadata.json']) };
   writeJSON(join(coreDirectory, 'VALIDATION.json'), core);
   writeJSON(join(windowsDirectory, 'WINDOWS-VALIDATION.json'), windows);
@@ -132,6 +132,19 @@ test('pinned client commits, signing identities, build checks, versions and arti
   writeJSON(join(p.windowsDirectory, 'WINDOWS-VALIDATION.json'), p.windows);
   writeFileSync(join(p.androidDirectory, p.android.artifacts[0].filename), 'changed APK');
   assert.throws(() => collectRelease(p), /Changed artifact/);
+});
+
+test('Android publication requires the verified official-client Go compiler gate and stable version record', t => {
+  const f = fixture(t), p = packages(f);
+  writeJSON(join(p.androidDirectory, 'ANDROID-VALIDATION.json'), { ...p.android,
+    checks: p.android.checks.filter(check => check !== 'official-client-go-toolchain') });
+  assert.throws(() => collectRelease(p));
+  for (const goVersion of [undefined, '', 'go1.26.8', '1.26', '1.26.8rc1', '1.026.8']) {
+    writeJSON(join(p.androidDirectory, 'ANDROID-VALIDATION.json'), { ...p.android, goVersion });
+    assert.throws(() => collectRelease(p), /verified stable Go toolchain/);
+  }
+  writeJSON(join(p.androidDirectory, 'ANDROID-VALIDATION.json'), p.android);
+  assert.equal(collectRelease(p).schema, 2);
 });
 
 test('a complete consistent source set produces checksums and schema2 and detects later release corruption', t => {

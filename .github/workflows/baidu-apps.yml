@@ -146,9 +146,12 @@ jobs:
         env:
           EXPECTED_HEAD: ${{ needs.prepare.outputs.source_sha }}
         run: node tools/baidu-pipeline.mjs import --directory "$RUNNER_TEMP/baidu-candidate" --expected-head "$EXPECTED_HEAD" --expected-run-id "$GITHUB_RUN_ID"
+      - name: Read the pinned official client's Android requirements
+        id: android-sdk
+        run: node tools/baidu-android-build.mjs requirements
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version-file: go.mod
+          go-version: ${{ steps.android-sdk.outputs.go_version }}
           cache: true
       - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
@@ -163,9 +166,6 @@ jobs:
           # 22.0 rather than this action revision's older default 16.0.
           cmdline-tools-version: '15859902'
           log-accepted-android-sdk-licenses: false
-      - name: Read the pinned official client's Android requirements
-        id: android-sdk
-        run: node tools/baidu-android-build.mjs requirements
       - name: Install the client's exact SDK and NDK packages
         env:
           SDK_PACKAGES: ${{ steps.android-sdk.outputs.sdk_packages }}

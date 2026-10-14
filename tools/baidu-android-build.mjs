@@ -50,17 +50,28 @@ function replaceOnce(text, from, to, label) {
 
 export function readAndroidRequirements(clientRoot) {
   const build = readFileSync(join(clientRoot, 'app/build.gradle.kts'), 'utf8');
+  const propertiesPath = join(clientRoot, 'version.properties');
+  if (!existsSync(propertiesPath)) throw new Error('The pinned Android client version.properties is missing; cannot determine its Go toolchain.');
+  const properties = readFileSync(propertiesPath, 'utf8');
+  const goEntries = [...properties.matchAll(/^GO_VERSION=([^\r\n]*)\r?$/gm)];
+  const goVersion = goEntries[0]?.[1].match(/^go((?:[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/)?.[1];
+  if (goEntries.length !== 1 || !goVersion) throw new Error('The pinned Android client must declare exactly one valid stable GO_VERSION (for example go1.26.8) in version.properties.');
   const compileSdk = build.match(/\bcompileSdk\s*=\s*(\d+)\b/)?.[1];
   const minor = build.match(/\bcompileSdkMinor\s*=\s*(\d+)\b/)?.[1];
   const ndk = build.match(/\bndkVersion\s*=\s*"(\d+(?:\.\d+){2})"/)?.[1];
   if (!compileSdk || !ndk) throw new Error('Cannot determine the pinned Android SDK/NDK requirements.');
   return {
-    java: 17,
+    java: 17, goVersion,
     // gomobile v0.1.13 only recognizes integer platform directory suffixes;
     // android-37.1 alone cannot supply its API-24 Java binding bootclasspath.
     sdkPackages: ['platforms;android-24', `platforms;android-${compileSdk}${minor ? `.${minor}` : ''}`, `build-tools;${compileSdk}.0.0`, `ndk;${ndk}`],
     buildTools: `${compileSdk}.0.0`, ndk,
   };
+}
+
+export function validateGoToolchain(actual, expected) {
+  if (actual !== `go${expected}`)
+    throw new Error(`Android libbox requires the pinned client's Go toolchain go${expected}; actual GOVERSION is ${actual}.`);
 }
 
 export function overlayGradle(text) {
@@ -264,7 +275,7 @@ async function main() {
   const requirements = readAndroidRequirements(client.directory);
   if (mode === 'requirements') {
     console.log(JSON.stringify({ ...requirements, clientCommit: client.commit }));
-    if (process.env.GITHUB_OUTPUT) writeFileSync(process.env.GITHUB_OUTPUT, `sdk_packages=${requirements.sdkPackages.join(' ')}\nndk=${requirements.ndk}\n`, { flag: 'a' });
+    if (process.env.GITHUB_OUTPUT) writeFileSync(process.env.GITHUB_OUTPUT, `sdk_packages=${requirements.sdkPackages.join(' ')}\nndk=${requirements.ndk}\ngo_version=${requirements.goVersion}\n`, { flag: 'a' });
     return;
   }
   if (process.platform !== 'linux' || process.arch !== 'x64') throw new Error('APK builds run on the GitHub Actions Linux amd64 runner.');
@@ -301,8 +312,10 @@ async function main() {
     if (!existsSync(join(ndk, 'source.properties')) || !existsSync(join(tools, 'apksigner'))) throw new Error('Pinned Android SDK build-tools / NDK are not installed.');
     const java = run('java', ['--version'], { capture: true });
     if (!/openjdk 17\b/.test(java)) throw new Error('The Android library requires OpenJDK 17.');
-    run('make', ['lib_install']);
-    const gopath = run('go', ['env', 'GOPATH'], { capture: true });
+    const goEnv = { GOTOOLCHAIN: 'local' };
+    validateGoToolchain(run('go', ['env', 'GOVERSION'], { capture: true, env: goEnv }), requirements.goVersion);
+    run('make', ['lib_install'], { env: goEnv });
+    const gopath = run('go', ['env', 'GOPATH'], { capture: true, env: goEnv });
     const gomobile = join(gopath, 'bin/gomobile');
     const builderSource = readFileSync('cmd/internal/build_libbox/main.go', 'utf8');
     const tags = [...builderSource.matchAll(/sharedTags = append\(sharedTags,([\s\S]*?)\)/g)].flatMap(match => [...match[1].matchAll(/"([a-z0-9_]+)"/g)].map(tag => tag[1]));
@@ -338,10 +351,10 @@ async function main() {
     if (git('rev-parse', 'HEAD') !== head || git('rev-parse', 'HEAD^{tree}') !== tree || git('status', '--porcelain')) throw new Error('Core checkout changed during APK construction.');
     const artifacts = [filename, 'SFA-version-metadata.json'].map(filename => ({ filename, sha256: sha256(join(output, filename)) }));
     const receipt = { schema: 1, success: true, head, tree, upstreamTag, version, versionCode, applicationId: APP_ID,
-      appSource: client.commit, appSourceRepository: CLIENT_URL, target: 'android/arm64-v8a', minSdk: 24,
+      appSource: client.commit, appSourceRepository: CLIENT_URL, target: 'android/arm64-v8a', minSdk: 24, goVersion: requirements.goVersion,
       certificateSha256: certificate, signerSHA256: certificate, coreContainsBaidu: true,
       librarySha256: sha256(library), apkLibboxSha256: sha256(nativePath),
-      buildTags: tags, checks: ['official-pinned-client', 'custom-libbox-built-from-core', 'apk-assembly', 'apk-signature', 'package-id', 'version-metadata', 'arm64-v8a-only', 'elf64-aarch64-libbox', 'baidu-core-provenance'], artifacts };
+      buildTags: tags, checks: ['official-pinned-client', 'official-client-go-toolchain', 'custom-libbox-built-from-core', 'apk-assembly', 'apk-signature', 'package-id', 'version-metadata', 'arm64-v8a-only', 'elf64-aarch64-libbox', 'baidu-core-provenance'], artifacts };
     writeFileSync(join(output, 'ANDROID-VALIDATION.json'), `${JSON.stringify(receipt, null, 2)}\n`);
     console.log(`Built and verified ${filename} (${APP_ID}, Android 7+, arm64-v8a).`);
   } finally {

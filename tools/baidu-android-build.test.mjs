@@ -3,20 +3,47 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { overlayGradle, readAndroidRequirements, validateBadging, validateNativeCore, validateSignature, androidUpdateChecker, APP_ID } from './baidu-android-build.mjs';
+import { overlayGradle, readAndroidRequirements, validateGoToolchain, validateBadging, validateNativeCore, validateSignature, androidUpdateChecker, APP_ID } from './baidu-android-build.mjs';
 
 test('SDK requirements provide an integer platform for gomobile alongside the GUI compile SDK', () => {
   const client = mkdtempSync(join(tmpdir(), 'baidu-android-sdk-fixture-'));
   try {
     mkdirSync(join(client, 'app'));
     writeFileSync(join(client, 'app/build.gradle.kts'), 'compileSdk = 37\ncompileSdkMinor = 1\nndkVersion = "28.0.13004108"\n');
+    writeFileSync(join(client, 'version.properties'), 'VERSION_CODE=743\nVERSION_NAME=1.14.3\nGO_VERSION=go1.26.8\n');
     assert.deepEqual(readAndroidRequirements(client).sdkPackages, ['platforms;android-24', 'platforms;android-37.1', 'build-tools;37.0.0', 'ndk;28.0.13004108']);
+    assert.equal(readAndroidRequirements(client).goVersion, '1.26.8');
   } finally {
     // The test deletes only the exact absolute directory returned by mkdtemp.
     assert.equal(dirname(resolve(client)), resolve(tmpdir()));
     assert.ok(basename(client).startsWith('baidu-android-sdk-fixture-'));
     rmSync(client, { recursive: true, force: true });
   }
+});
+
+test('Android requirements refuse a missing or invalid pinned Go version', () => {
+  const client = mkdtempSync(join(tmpdir(), 'baidu-android-go-fixture-'));
+  try {
+    mkdirSync(join(client, 'app'));
+    writeFileSync(join(client, 'app/build.gradle.kts'), 'compileSdk = 37\nndkVersion = "28.0.13004108"\n');
+    assert.throws(() => readAndroidRequirements(client), /version\.properties is missing/);
+    for (const props of ['VERSION_NAME=1.14.3\n', 'GO_VERSION=\n', 'GO_VERSION=1.26.8\n', 'GO_VERSION=go1.26\n', 'GO_VERSION=go1.26.8rc1\n', 'GO_VERSION=go1.26.8\nGO_VERSION=go1.26.9\n']) {
+      writeFileSync(join(client, 'version.properties'), props);
+      assert.throws(() => readAndroidRequirements(client), /exactly one valid stable GO_VERSION/);
+    }
+    writeFileSync(join(client, 'version.properties'), 'GO_VERSION=go1.26.8\r\n');
+    assert.equal(readAndroidRequirements(client).goVersion, '1.26.8');
+  } finally {
+    assert.equal(dirname(resolve(client)), resolve(tmpdir()));
+    assert.ok(basename(client).startsWith('baidu-android-go-fixture-'));
+    rmSync(client, { recursive: true, force: true });
+  }
+});
+
+test('Android libbox refuses a different installed Go compiler', () => {
+  assert.doesNotThrow(() => validateGoToolchain('go1.26.8', '1.26.8'));
+  for (const actual of ['go1.25.5', 'go1.26.9', 'go1.26.8rc1'])
+    assert.throws(() => validateGoToolchain(actual, '1.26.8'), /requires the pinned client's Go toolchain go1\.26\.8/);
 });
 
 test('Android overlay uses a separate app ID and removes all non-arm64 outputs', () => {

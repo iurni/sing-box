@@ -12,7 +12,7 @@ export const REQUIRED_TARGETS = ['linux/amd64', 'windows/amd64', 'android/arm64'
 export const REQUIRED_CHECKS = ['sync-fixtures', 'pipeline-fixtures', 'root-go-tests', 'baidu-race-tests', 'config-smoke', 'e2e-loopback', 'windows-client-signed', 'android-client-signed'];
 const CORE_CHECKS = REQUIRED_CHECKS.slice(0, 6);
 const WINDOWS_CHECKS = ['pinned-sfw-source', 'fork-update-source', 'isolated-installation', 'source-built-baidu-daemon', 'amd64-pe', 'matching-authenticode-signatures', 'installer-product'];
-const ANDROID_CHECKS = ['official-pinned-client', 'custom-libbox-built-from-core', 'apk-assembly', 'apk-signature', 'package-id', 'version-metadata', 'arm64-v8a-only', 'elf64-aarch64-libbox', 'baidu-core-provenance'];
+const ANDROID_CHECKS = ['official-pinned-client', 'official-client-go-toolchain', 'custom-libbox-built-from-core', 'apk-assembly', 'apk-signature', 'package-id', 'version-metadata', 'arm64-v8a-only', 'elf64-aarch64-libbox', 'baidu-core-provenance'];
 function run(command, args, cwd) {
   const result = spawnSync(command, args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   if (result.error) throw result.error;
@@ -141,6 +141,10 @@ export function collectRelease({ cwd = process.cwd(), coreDirectory, windowsDire
   assert.match(android.appSource, /^[a-f0-9]{40}$/);
   assert.deepEqual(windows.checks, WINDOWS_CHECKS);
   assert.deepEqual(android.checks, ANDROID_CHECKS);
+  // The Android builder verifies GOVERSION against version.properties from
+  // this exact client gitlink. Client Git objects are not in the core bundle,
+  // so collection must not fetch a floating client ref to repeat that check.
+  assert.match(android.goVersion || '', /^(?:[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/, 'Android receipt must record the verified stable Go toolchain.');
   assert.deepEqual(core.targets, REQUIRED_TARGETS.slice(0, 3));
   assert.deepEqual(core.checks, CORE_CHECKS);
   assert.equal(core.artifacts.length, 3);
