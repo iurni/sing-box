@@ -27,7 +27,10 @@ provider credential is stored in the source tree or release artifacts.
 The GitHub Ubuntu build uses Java 17, the SDK / NDK versions declared by the
 pinned client, and the official `make lib_install` gomobile version. Only the
 modern Android library and `:app:assembleOtherRelease` arm64-v8a application are
-built. The APK gate checks its signature against the expected certificate,
+built. SDK platform 24 is also installed for gomobile's Java binding classpath:
+gomobile 0.1.13 recognizes integer platform names, while the client uses a minor
+compile SDK such as `android-37.1`. The client's compile SDK stays unchanged.
+The APK gate checks its signature against the expected certificate,
 package ID, label, version, minimum SDK, native ABIs, and the custom Baidu code
 and core version in `libbox.so`. `ANDROID-VALIDATION.json` records the source
 commits and artifact digests. These checks confirm package construction; device

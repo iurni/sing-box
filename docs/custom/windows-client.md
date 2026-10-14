@@ -54,8 +54,11 @@ node tools/baidu-windows-client.mjs verify
 
 Preparation refuses mismatched client commits or changed upstream patch anchors.
 Build and verification also refuse tracked root/client changes outside the
-declared identity/version overlay, including unexpected changes to nested client
-submodules. Ignored generated output and local signing settings remain permitted.
+declared identity/version overlay. The pinned dashboard generator rewrites the
+tracked `src/components/iconPaths.ts`; the build records that command and output
+digest before packaging, then requires packaging to reproduce it. Other dashboard
+changes, vendor changes, and a changed icon digest fail validation. Ignored
+generated output and local signing settings remain permitted.
 The official package command builds the daemon locally, includes the upstream
 drivers and Cronet library, builds the Rust sharing module, and runs its signing
 and Electron integrity hooks. Verification checks PE AMD64 architecture, the
@@ -68,8 +71,9 @@ installer identity without registering a service or starting a VPN.
 
 `dist/baidu-windows-packages` contains the installer and
 `WINDOWS-VALIDATION.json`, with the root commit/tree, pinned client commit,
-checked patch digests, certificate fingerprint, and installer SHA-256. Neither
-the certificate key nor any subscription credentials are included.
+checked patch digests, certificate fingerprint, and installer SHA-256. The receipt
+also records the pinned dashboard commit and generated icon digest. Neither the
+certificate key nor any subscription credentials are included.
 
 The local protocol mock tests do not prove that a real provider accepts your
 gateway/account. A client package may build successfully while a particular

@@ -8,6 +8,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const CLIENT = 'clients/desktop';
+const DASHBOARD = `${CLIENT}/dashboard`;
+const GENERATED_ICON_PATHS = `${DASHBOARD}/src/components/iconPaths.ts`;
 const PRODUCT = 'sing-box Baidu';
 const PACKAGE_DIRECTORY = 'dist/baidu-windows-packages';
 const STATE = 'baidu-windows-state.json';
@@ -94,6 +96,9 @@ function prepare(root, version) {
   assert.match(gitlink, /^[a-f0-9]{40}$/);
   assert.equal(appSource, gitlink, 'SFW source must use the upstream stable gitlink.');
   assert.equal(git(join(root, CLIENT), 'status', '--porcelain'), '', 'SFW preparation requires pristine client sources.');
+  const dashboardSource = git(join(root, CLIENT), 'ls-tree', 'HEAD', 'dashboard').split(/\s+/)[2];
+  assert.equal(git(join(root, DASHBOARD), 'rev-parse', 'HEAD'), dashboardSource,
+    'The dashboard source must use the stable desktop gitlink.');
   assert(readFileSync(join(root, 'include/registry.go'), 'utf8').includes('baidu.RegisterOutbound'));
   const patches = planWindowsPatches(root, version);
   const packageMetadata = json(join(root, CLIENT, 'package.json'));
@@ -110,7 +115,8 @@ function prepare(root, version) {
     'tag', '-a', localTag, '-m', 'Local client build version', head]);
   assert.equal(git(root, 'describe', '--tags'), localTag, 'Client and core version tag mismatch.');
   for (const [file, change] of patches) writeFileSync(join(root, file), change.after);
-  const state = { schema: 1, head, tree, upstreamTag, appSource, version, product: PRODUCT,
+  const state = { schema: 1, head, tree, upstreamTag, appSource, dashboardSource, version, product: PRODUCT,
+    generated: [],
     patches: [...patches].map(([file, change]) => ({ file, before: hash(change.before), after: hash(change.after) })) };
   writeFileSync(statePath(root), JSON.stringify(state, null, 2) + '\n');
   output('go_version', clientMetadata.go_version.slice(2));
@@ -126,6 +132,21 @@ export function validateChangedSourceScope(root, state) {
     .filter(file => file.startsWith(`${CLIENT}/`)).map(file => file.slice(CLIENT.length + 1));
   const changed = directory => git(directory, 'diff', '--ignore-submodules=none', '--name-only', 'HEAD', '--')
     .split(/\r?\n/).filter(Boolean).sort();
+  if (state.dashboardSource) {
+    assert.equal(git(join(root, DASHBOARD), 'rev-parse', 'HEAD'), state.dashboardSource,
+      'The pinned dashboard source changed during packaging.');
+    const generated = state.generated || [];
+    for (const output of generated) {
+      assert.equal(output.file, GENERATED_ICON_PATHS, 'Unexpected declared dashboard generator output.');
+      assert.equal(hash(readFileSync(join(root, output.file))), output.sha256,
+        'A declared dashboard generator output changed after generation.');
+    }
+    const expectedDashboard = generated.filter(output => output.changed)
+      .map(output => output.file.slice(DASHBOARD.length + 1)).sort();
+    assert.deepEqual(changed(join(root, DASHBOARD)), expectedDashboard,
+      'Dashboard tracked changes do not exactly match its declared generated icon file.');
+    if (expectedDashboard.length) clientPaths.push('dashboard');
+  }
   assert.deepEqual(changed(root), [...rootPaths, CLIENT].sort(),
     'Root tracked working changes do not exactly match the declared Windows overlay.');
   assert.deepEqual(changed(join(root, CLIENT)), clientPaths.sort(),
@@ -145,10 +166,23 @@ function validateState(root) {
 
 function build(root) {
   assert.equal(process.platform, 'win32', 'SFW installer must be built on a Windows runner.');
-  validateState(root);
+  const state = validateState(root);
   assert(existsSync(join(root, CLIENT, 'signing.local.json')), 'Run the Windows signing helper with persistent certificate secrets first.');
   process.env.CSC_IDENTITY_AUTO_DISCOVERY = 'false';
   run(root, 'pnpm', ['-C', CLIENT, 'install', '--frozen-lockfile']);
+  // Upstream generation rewrites iconPaths.ts, which is a tracked generated
+  // dashboard file. Generate it before packaging and bind that exact output
+  // digest; the package command reruns the generator and must reproduce it.
+  run(root, 'pnpm', ['-C', DASHBOARD, 'install', '--frozen-lockfile']);
+  run(root, 'pnpm', ['-C', DASHBOARD, 'generate']);
+  const dashboardChanges = git(join(root, DASHBOARD), 'diff', '--ignore-submodules=none', '--name-only', 'HEAD', '--')
+    .split(/\r?\n/).filter(Boolean);
+  assert(dashboardChanges.every(file => file === 'src/components/iconPaths.ts'),
+    `Unexpected dashboard generator changes: ${dashboardChanges.join(', ')}`);
+  state.generated = [{ file: GENERATED_ICON_PATHS, sha256: hash(readFileSync(join(root, GENERATED_ICON_PATHS))),
+    command: ['pnpm', '-C', DASHBOARD, 'generate'], changed: dashboardChanges.length !== 0 }];
+  writeFileSync(statePath(root), JSON.stringify(state, null, 2) + '\n');
+  validateState(root);
   run(root, 'pnpm', ['-C', CLIENT, 'package:win', '--', 'x64']);
   // Upstream's package command builds cmd/internal/build_boxdd from repository
   // root; its afterPack signs both daemon and Rust module, retaining peer checks.
@@ -213,7 +247,8 @@ function verify(root) {
   mkdirSync(destination, { recursive: true });
   copyFileSync(installer, join(destination, artifact.filename));
   const receipt = { schema: 1, success: true, head: state.head, tree: state.tree,
-    upstreamTag: state.upstreamTag, appSource: state.appSource, version: state.version,
+    upstreamTag: state.upstreamTag, appSource: state.appSource, dashboardSource: state.dashboardSource,
+    generated: state.generated, version: state.version,
     target: 'windows/amd64-gui', checks: CHECKS, signerSHA256: signatures.signerSHA256,
     coreContainsBaidu: true, applicationMachine: 'amd64', daemonSHA256: hash(readFileSync(daemon)),
     patches: state.patches, artifacts: [artifact] };

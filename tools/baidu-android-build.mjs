@@ -56,7 +56,9 @@ export function readAndroidRequirements(clientRoot) {
   if (!compileSdk || !ndk) throw new Error('Cannot determine the pinned Android SDK/NDK requirements.');
   return {
     java: 17,
-    sdkPackages: [`platforms;android-${compileSdk}${minor ? `.${minor}` : ''}`, `build-tools;${compileSdk}.0.0`, `ndk;${ndk}`],
+    // gomobile v0.1.13 only recognizes integer platform directory suffixes;
+    // android-37.1 alone cannot supply its API-24 Java binding bootclasspath.
+    sdkPackages: ['platforms;android-24', `platforms;android-${compileSdk}${minor ? `.${minor}` : ''}`, `build-tools;${compileSdk}.0.0`, `ndk;${ndk}`],
     buildTools: `${compileSdk}.0.0`, ndk,
   };
 }

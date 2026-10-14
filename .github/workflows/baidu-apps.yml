@@ -155,6 +155,14 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          # The deprecated SDK 'tools' package is no longer published. Install
+          # only platform-tools here; the pinned client determines the rest below.
+          packages: platform-tools
+          # SDK 37.1 uses the current repository schema; pin command-line tools
+          # 22.0 rather than this action revision's older default 16.0.
+          cmdline-tools-version: '15859902'
+          log-accepted-android-sdk-licenses: false
       - name: Read the pinned official client's Android requirements
         id: android-sdk
         run: node tools/baidu-android-build.mjs requirements

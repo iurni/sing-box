@@ -1,6 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { overlayGradle, validateBadging, validateNativeCore, androidUpdateChecker, APP_ID } from './baidu-android-build.mjs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
+import { overlayGradle, readAndroidRequirements, validateBadging, validateNativeCore, androidUpdateChecker, APP_ID } from './baidu-android-build.mjs';
+
+test('SDK requirements provide an integer platform for gomobile alongside the GUI compile SDK', () => {
+  const client = mkdtempSync(join(tmpdir(), 'baidu-android-sdk-fixture-'));
+  try {
+    mkdirSync(join(client, 'app'));
+    writeFileSync(join(client, 'app/build.gradle.kts'), 'compileSdk = 37\ncompileSdkMinor = 1\nndkVersion = "28.0.13004108"\n');
+    assert.deepEqual(readAndroidRequirements(client).sdkPackages, ['platforms;android-24', 'platforms;android-37.1', 'build-tools;37.0.0', 'ndk;28.0.13004108']);
+  } finally {
+    // The test deletes only the exact absolute directory returned by mkdtemp.
+    assert.equal(dirname(resolve(client)), resolve(tmpdir()));
+    assert.ok(basename(client).startsWith('baidu-android-sdk-fixture-'));
+    rmSync(client, { recursive: true, force: true });
+  }
+});
 
 test('Android overlay uses a separate app ID and removes all non-arm64 outputs', () => {
   const upstream = 'applicationId = "io.nekohasekai.sfa"\nbase.archivesName.set("SFA-${versionName}")\ninclude("armeabi-v7a", "arm64-v8a", "x86", "x86_64")\nisUniversalApk = true\ntargetSdk = 37';

@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync,
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { executableContentDigest, planWindowsPatches, portableExecutableMachine, validateChangedSourceScope } from './baidu-windows-client.mjs';
 
@@ -85,11 +86,24 @@ test('source scope accepts declared overlays and ignored build files but rejects
   const fixture = mkdtempSync(join(tmpdir(), 'baidu-windows-scope-'));
   assert(fixture.startsWith(join(tmpdir(), 'baidu-windows-scope-')));
   const client = join(fixture, 'clients/desktop');
+  const dashboard = join(client, 'dashboard');
+  const vendor = join(dashboard, 'vendor/iterm2-color-schemes');
   const git = (directory, ...args) => execFileSync('git', args, { cwd: directory, encoding: 'utf8', stdio: 'pipe' });
   const commit = directory => git(directory, '-c', 'user.name=Baidu test', '-c', 'user.email=baidu-test@example.invalid',
     '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture');
   try {
     mkdirSync(client, { recursive: true });
+    mkdirSync(vendor, { recursive: true });
+    writeFileSync(join(vendor, 'colors.json'), '{}\n');
+    git(vendor, 'init', '-q');
+    git(vendor, 'add', '.');
+    commit(vendor);
+    mkdirSync(join(dashboard, 'src/components'), { recursive: true });
+    writeFileSync(join(dashboard, 'src/components/iconPaths.ts'), 'original icons\n');
+    writeFileSync(join(dashboard, 'other.ts'), 'original\n');
+    git(dashboard, 'init', '-q');
+    git(dashboard, 'add', '.');
+    commit(dashboard);
     writeFileSync(join(client, '.gitignore'), '/bin/\n/signing.local.json\n');
     writeFileSync(join(client, 'version.json'), '{}\n');
     writeFileSync(join(client, 'other.ts'), 'original\n');
@@ -104,11 +118,28 @@ test('source scope accepts declared overlays and ignored build files but rejects
     commit(fixture);
     writeFileSync(join(fixture, 'main.go'), 'declared patch\n');
     writeFileSync(join(client, 'version.json'), '{"version":"custom"}\n');
-    const state = { patches: [{ file: 'main.go' }, { file: 'clients/desktop/version.json' }] };
+    const state = { patches: [{ file: 'main.go' }, { file: 'clients/desktop/version.json' }],
+      dashboardSource: git(dashboard, 'rev-parse', 'HEAD').trim(), generated: [] };
     mkdirSync(join(client, 'bin'), { recursive: true });
     writeFileSync(join(client, 'bin/daemon.exe'), 'ignored build\n');
     writeFileSync(join(client, 'signing.local.json'), '{}\n');
     assert.doesNotThrow(() => validateChangedSourceScope(fixture, state));
+    const generatedPath = join(dashboard, 'src/components/iconPaths.ts');
+    const generatedContent = 'generated icons\n';
+    writeFileSync(generatedPath, generatedContent);
+    state.generated = [{ file: 'clients/desktop/dashboard/src/components/iconPaths.ts',
+      sha256: createHash('sha256').update(generatedContent).digest('hex'), changed: true,
+      command: ['pnpm', '-C', 'clients/desktop/dashboard', 'generate'] }];
+    assert.doesNotThrow(() => validateChangedSourceScope(fixture, state));
+    writeFileSync(generatedPath, 'tampered icons\n');
+    assert.throws(() => validateChangedSourceScope(fixture, state), /output changed after generation/);
+    writeFileSync(generatedPath, generatedContent);
+    writeFileSync(join(dashboard, 'other.ts'), 'unrelated tracked edit\n');
+    assert.throws(() => validateChangedSourceScope(fixture, state), /Dashboard tracked changes/);
+    writeFileSync(join(dashboard, 'other.ts'), 'original\n');
+    writeFileSync(join(vendor, 'colors.json'), '{"tampered":true}\n');
+    assert.throws(() => validateChangedSourceScope(fixture, state), /Dashboard tracked changes/);
+    writeFileSync(join(vendor, 'colors.json'), '{}\n');
     writeFileSync(join(fixture, 'other.go'), 'unrelated tracked edit\n');
     assert.throws(() => validateChangedSourceScope(fixture, state), /Root tracked working changes/);
     writeFileSync(join(fixture, 'other.go'), 'original\n');
