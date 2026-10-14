@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { overlayGradle, readAndroidRequirements, validateBadging, validateNativeCore, androidUpdateChecker, APP_ID } from './baidu-android-build.mjs';
+import { overlayGradle, readAndroidRequirements, validateBadging, validateNativeCore, validateSignature, androidUpdateChecker, APP_ID } from './baidu-android-build.mjs';
 
 test('SDK requirements provide an integer platform for gomobile alongside the GUI compile SDK', () => {
   const client = mkdtempSync(join(tmpdir(), 'baidu-android-sdk-fixture-'));
@@ -64,4 +64,16 @@ test('Native core gate refuses a wrong ELF architecture or stock library', () =>
   assert.throws(() => validateNativeCore(otherArchitecture, '1.14.3-baidu.1234'), /AArch64/);
   assert.throws(() => validateNativeCore(header, '1.14.3-baidu.1234'), /custom Baidu/);
   assert.throws(() => validateNativeCore(native, '1.14.3-baidu.9999'), /expected core version/);
+});
+
+test('APK signature gate recognizes v3.1 SDK ranges without accepting a different signer', () => {
+  const certificate = '12'.repeat(32);
+  const oldOutput = `Number of signers: 1\nSigner #1 certificate SHA-256 digest: ${certificate}`;
+  const newOutput = `Number of signers: 1\nSigner (minSdkVersion=33, maxSdkVersion=2147483647) certificate SHA-256 digest: ${certificate}\nSigner (minSdkVersion=24, maxSdkVersion=32) certificate SHA-256 digest: ${certificate}`;
+  assert.equal(validateSignature(oldOutput, certificate), certificate);
+  assert.equal(validateSignature(newOutput, certificate), certificate);
+  assert.throws(() => validateSignature(newOutput.replace(certificate, '34'.repeat(32)), certificate), /actual signature metadata/);
+  assert.throws(() => validateSignature(oldOutput.replace('Number of signers: 1', 'Number of signers: 2'), certificate));
+  assert.throws(() => validateSignature(`${oldOutput}\nSigner #2 certificate SHA-256 digest: ${certificate}`, certificate));
+  assert.throws(() => validateSignature(`Number of signers: 1\nSource Stamp Signer certificate SHA-256 digest: ${certificate}`, certificate));
 });

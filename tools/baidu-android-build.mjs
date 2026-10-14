@@ -179,6 +179,19 @@ export function validateNativeCore(native, version) {
     throw new Error('The APK does not contain this custom Baidu core / expected core version.');
 }
 
+export function validateSignature(signature, expectedCertificate) {
+  // For v3.1, official apksigner prints certificates with SDK ranges instead
+  // of Signer #1. Every range must retain this fork's persistent identity.
+  const signers = [...signature.matchAll(/^(Signer (?:#\d+|\(minSdkVersion=[^\r\n]+\))) certificate SHA-256 digest: ([0-9a-fA-F]{64})\r?$/gm)];
+  const count = signature.match(/^Number of signers: (\d+)\r?$/m)?.[1];
+  const summary = signature.split(/\r?\n/).filter(line => /^Number of signers:|^Signer .* certificate SHA-256 digest:/.test(line))
+    .map(line => line.slice(0, 300)).slice(0, 8).join(' | ');
+  const expected = expectedCertificate.replaceAll(':', '').toLowerCase();
+  if (count !== '1' || signers.length === 0 || signers.some(match => match[2].toLowerCase() !== expected || /^Signer #(?!1$)/.test(match[1])))
+    throw new Error(`APK signer does not match the persistent fork signing certificate. Expected SHA-256 ${expected}; actual signature metadata: ${summary || '<missing>'}`);
+  return expected;
+}
+
 function pinnedClient(root) {
   const gitlink = git('ls-tree', 'HEAD', 'clients/android').match(/^160000 commit ([0-9a-f]{40})\tclients\/android$/)?.[1];
   if (!gitlink) throw new Error('The official clients/android pinned submodule is missing.');
@@ -307,8 +320,7 @@ async function main() {
     const builtApk = join(client.directory, 'app/build/outputs/apk/other/release', apks[0]);
     validateBadging(run(join(tools, 'aapt2'), ['dump', 'badging', builtApk], { capture: true }), version, versionCode);
     const signature = run(join(tools, 'apksigner'), ['verify', '--verbose', '--print-certs', builtApk], { capture: true });
-    const certificate = signature.match(/Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]{64})/)?.[1]?.toLowerCase();
-    if (certificate !== expectedCertificate || /Signer #2 certificate/.test(signature)) throw new Error('APK signer does not match the persistent fork signing certificate.');
+    const certificate = validateSignature(signature, expectedCertificate);
     const archiveEntries = run('unzip', ['-Z1', builtApk], { capture: true }).split('\n');
     if (!archiveEntries.includes('lib/arm64-v8a/libbox.so') || archiveEntries.some(name => /^lib\/(?!arm64-v8a\/)/.test(name))) throw new Error('APK native ABI set is incorrect.');
     const nativePath = join(client.directory, 'libbox-from-apk.so');
