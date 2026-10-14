@@ -38,7 +38,7 @@ jobs:
       # Reading go.mod after the merge lets an upstream stable release update Go.
       - name: Set up the candidate's Go toolchain
         if: steps.prepare.outputs.changed == 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
           cache: true
@@ -63,7 +63,7 @@ jobs:
       # sync job builds and uploads its own artifacts before it can count as done.
       - name: Upload packages built from the validated merge
         if: steps.prepare.outputs.changed == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: baidu-${{ steps.prepare.outputs.tag }}-${{ github.run_id }}
           path: dist/baidu-packages/*

@@ -31,6 +31,16 @@ export function latestStableTag(releases) {
   return tags.at(-1);
 }
 
+export function parseReleasePages(jsonLines) {
+  // gh --paginate --jq writes one compact JSON array per page. --slurp cannot
+  // be combined with --jq, and unfiltered release/asset metadata is enormous.
+  return jsonLines.trim().split(/\r?\n/).filter(Boolean).flatMap(line => {
+    const page = JSON.parse(line);
+    if (!Array.isArray(page)) throw new Error('Expected a compact release metadata page array.');
+    return page;
+  });
+}
+
 function command(program, args, cwd, options = {}) {
   const result = spawnSync(program, args, {
     cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
@@ -76,12 +86,17 @@ export function prepare({ cwd = process.cwd(), tag, upstream = OFFICIAL_URL, dry
   if (existsSync(filePaths.state)) throw new Error('A prepared candidate already exists; inspect it before starting another sync.');
   const previous = readFileSync(join(cwd, VERSION_FILE), 'utf8').trim();
   stableParts(previous);
-  if (!tag || upstream === OFFICIAL_URL) {
-    const json = command('gh', ['api', '--paginate', '--slurp', `repos/${OFFICIAL_REPOSITORY}/releases?per_page=100`], cwd);
-    const releases = JSON.parse(json).flat(Infinity);
-    if (tag && !releases.some(release => release.tag_name === tag && !release.draft && !release.prerelease))
+  if (tag && upstream === OFFICIAL_URL) {
+    stableParts(tag);
+    const json = command('gh', ['api', `repos/${OFFICIAL_REPOSITORY}/releases/tags/${tag}`,
+      '--jq', '{tag_name,draft,prerelease}'], cwd);
+    const release = JSON.parse(json);
+    if (release.tag_name !== tag || release.draft || release.prerelease)
       throw new Error('Requested tag is not a published official stable release.');
-    tag ||= latestStableTag(releases);
+  } else if (!tag) {
+    const json = command('gh', ['api', '--paginate', `repos/${OFFICIAL_REPOSITORY}/releases?per_page=100`,
+      '--jq', '[.[] | {tag_name,draft,prerelease}]'], cwd);
+    tag = latestStableTag(parseReleasePages(json));
   }
   stableParts(tag);
   if (compareTags(tag, previous) <= 0) {
@@ -107,6 +122,9 @@ export function prepare({ cwd = process.cwd(), tag, upstream = OFFICIAL_URL, dry
     command('git', ['merge', '--no-ff', '--no-edit', '-m', `Merge official sing-box ${tag}`, releaseCommit], cwd, { inherit: true });
     writeFileSync(join(cwd, VERSION_FILE), `${tag}\n`);
     command('git', ['add', '--', VERSION_FILE], cwd);
+    // Build exactly this committed tree. The publication step must not create a
+    // different source commit after BUILD-INFO/VALIDATION have been generated.
+    command('git', ['commit', '-m', `Track upstream ${tag} for validation`], cwd, { inherit: true });
     const state = { schema: 1, branch: TARGET_BRANCH, candidate, base, previous, tag,
       releaseCommit, mergeCommit: command('git', ['rev-parse', 'HEAD'], cwd) };
     writeFileSync(filePaths.state, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
@@ -115,6 +133,7 @@ export function prepare({ cwd = process.cwd(), tag, upstream = OFFICIAL_URL, dry
     return state;
   } catch (error) {
     command('git', ['merge', '--abort'], cwd, { allowFailure: true });
+    command('git', ['restore', '--source=HEAD', '--staged', '--worktree', '--', VERSION_FILE], cwd, { allowFailure: true });
     command('git', ['switch', branch], cwd, { inherit: true });
     command('git', ['branch', '-D', candidate], cwd);
     throw error;
@@ -131,20 +150,17 @@ export function publish({ cwd = process.cwd(), origin = 'origin' } = {}) {
   if (state.schema !== 1 || state.branch !== TARGET_BRANCH || receipt.schema !== 1 || receipt.success !== true)
     throw new Error('Invalid sync state or validation receipt.');
   const head = command('git', ['rev-parse', 'HEAD'], cwd);
-  const tree = command('git', ['write-tree'], cwd);
+  const tree = command('git', ['rev-parse', 'HEAD^{tree}'], cwd);
   if (command('git', ['branch', '--show-current'], cwd) !== state.candidate || head !== state.mergeCommit ||
       receipt.head !== head || receipt.tree !== tree || receipt.upstreamTag !== state.tag)
     throw new Error('Candidate changed after validation; no branch was pushed.');
-  if (command('git', ['diff', '--name-only'], cwd) ||
-      command('git', ['diff', '--cached', '--name-only'], cwd) !== VERSION_FILE ||
-      command('git', ['ls-files', '--others', '--exclude-standard'], cwd))
-    throw new Error('Only the staged upstream version marker may differ from the validated merge.');
+  if (command('git', ['status', '--porcelain'], cwd))
+    throw new Error('Candidate checkout must remain clean after validation; no branch was pushed.');
   if (receipt.targets?.join(',') !== 'linux/amd64,windows/amd64,android/arm64' ||
       receipt.checks?.join(',') !== 'sync-fixtures,root-go-tests,baidu-race-tests,config-smoke,e2e-loopback')
     throw new Error('Validation did not include every required check and target.');
   const remoteHead = command('git', ['ls-remote', '--exit-code', origin, `refs/heads/${TARGET_BRANCH}`], cwd).split(/\s+/)[0];
   if (remoteHead !== state.base) throw new Error('Remote custom branch advanced while checks ran; stop and rerun from its latest commit.');
-  command('git', ['commit', '-m', `Track validated upstream ${state.tag}`], cwd, { inherit: true });
   // Normal fast-forward push remains safe if another push races with the preceding check.
   command('git', ['push', origin, `HEAD:refs/heads/${TARGET_BRANCH}`], cwd, { inherit: true });
   rmSync(filePaths.state);

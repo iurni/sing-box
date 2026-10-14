@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { compareTags, latestStableTag, prepare, publish, VERSION_FILE } from './baidu-sync.mjs';
+import { compareTags, latestStableTag, parseReleasePages, prepare, publish, VERSION_FILE } from './baidu-sync.mjs';
 
 function git(cwd, ...args) {
   const result = spawnSync('git', ['-c', 'core.autocrlf=false', ...args], { cwd, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
@@ -61,7 +62,7 @@ function receipt(f, state, change = {}) {
   // Stand in for baidu-build.mjs's receipt to exercise publication invariants.
   const gitDir = git(f.custom, 'rev-parse', '--absolute-git-dir');
   writeFileSync(join(gitDir, 'baidu-validation.json'), JSON.stringify({
-    schema: 1, success: true, head: state.mergeCommit, tree: git(f.custom, 'write-tree'),
+    schema: 1, success: true, head: state.mergeCommit, tree: git(f.custom, 'rev-parse', 'HEAD^{tree}'),
     upstreamTag: state.tag, targets: ['linux/amd64', 'windows/amd64', 'android/arm64'],
     checks: ['sync-fixtures', 'root-go-tests', 'baidu-race-tests', 'config-smoke', 'e2e-loopback'], ...change,
   }));
@@ -76,6 +77,16 @@ test('only non-draft exact stable releases participate, in numeric version order
   assert(compareTags('v1.10.0', 'v1.9.99') > 0);
   assert.throws(() => latestStableTag([{ tag_name: 'nightly' }]), /no stable/);
   assert.throws(() => compareTags('v1.2.3-beta.1', 'v1.2.3'), /stable release/);
+});
+
+test('compact paginated release metadata parses independently of asset response size', () => {
+  const output = '[{"tag_name":"v1.9.9","draft":false,"prerelease":false}]\r\n' +
+    '[{"tag_name":"v1.10.2","draft":false,"prerelease":false},{"tag_name":"v2.0.0-alpha.1","draft":false,"prerelease":true}]\n';
+  const releases = parseReleasePages(output);
+  assert.equal(releases.length, 3);
+  assert.equal(latestStableTag(releases), 'v1.10.2');
+  assert.deepEqual(Object.keys(releases[0]), ['tag_name', 'draft', 'prerelease']);
+  assert.throws(() => parseReleasePages('{"assets":[]}'), /page array/);
 });
 
 test('already-current releases do not change the branch or remote', t => {
@@ -104,6 +115,8 @@ test('prepare preserves custom code and keeps baidu and the remote unchanged', t
   assert.equal(readFileSync(join(f.custom, 'baidu.txt'), 'utf8'), 'custom protocol\n');
   assert.equal(readFileSync(join(f.custom, 'upstream.txt'), 'utf8'), 'next stable\n');
   assert.equal(readFileSync(join(f.custom, VERSION_FILE), 'utf8'), 'v1.0.1\n');
+  assert.equal(git(f.custom, 'status', '--porcelain'), '');
+  assert.equal(git(f.custom, 'show', `${state.mergeCommit}:${VERSION_FILE}`), 'v1.0.1');
 });
 
 test('merge conflicts abort and restore the original custom checkout', t => {
@@ -157,7 +170,7 @@ test('source edits after validation cannot publish', t => {
   const f = fixture(t); nextRelease(f);
   const state = candidate(f); receipt(f, state);
   write(f.custom, 'baidu.txt', 'changed after test\n');
-  assert.throws(() => publish({ cwd: f.custom }), /Only the staged/);
+  assert.throws(() => publish({ cwd: f.custom }), /must remain clean/);
   assert.equal(remoteHead(f), f.base);
 });
 
@@ -166,7 +179,7 @@ test('staged edits after validation cannot publish', t => {
   const state = candidate(f); receipt(f, state);
   write(f.custom, 'baidu.txt', 'changed after test\n');
   git(f.custom, 'add', 'baidu.txt');
-  assert.throws(() => publish({ cwd: f.custom }), /changed after validation/);
+  assert.throws(() => publish({ cwd: f.custom }), /must remain clean/);
   assert.equal(remoteHead(f), f.base);
 });
 
@@ -187,6 +200,7 @@ test('a complete matching validation publishes a normal merge without losing cus
   const state = candidate(f); receipt(f, state);
   publish({ cwd: f.custom });
   const published = remoteHead(f);
+  assert.equal(published, state.mergeCommit, 'published SHA must be exactly the SHA that passed validation');
   assert.notEqual(published, f.base);
   git(f.custom, 'merge-base', '--is-ancestor', f.base, published);
   assert.equal(git(f.custom, 'show', `${published}:baidu.txt`), 'custom protocol');
@@ -201,4 +215,44 @@ test('dirty or wrong-branch local checkouts stop before preparing a merge', t =>
   git(f.custom, 'restore', 'baidu.txt');
   git(f.custom, 'switch', 'stable');
   assert.throws(() => candidate(f), /baidu branch/);
+});
+
+test('release recovery verifies the exact commit and rejects changed archive data', t => {
+  const f = fixture(t);
+  mkdirSync(join(f.custom, 'tools'));
+  copyFileSync(new URL('./baidu-sync.mjs', import.meta.url), join(f.custom, 'tools/baidu-sync.mjs'));
+  git(f.custom, 'add', 'tools/baidu-sync.mjs'); git(f.custom, 'commit', '-m', 'Validation helper');
+  const head = git(f.custom, 'rev-parse', 'HEAD');
+  const tree = git(f.custom, 'rev-parse', 'HEAD^{tree}');
+  const directory = join(f.custom, 'dist/baidu-packages');
+  mkdirSync(directory, { recursive: true });
+  const artifacts = ['linux-amd64.tar.gz', 'windows-amd64.zip', 'android-arm64.tar.gz'].map(target => {
+    const filename = `sing-box-1.0.0-baidu.fixture-${target}`;
+    const bytes = Buffer.from(`fixture archive ${target}`);
+    writeFileSync(join(directory, filename), bytes);
+    return { filename, sha256: createHash('sha256').update(bytes).digest('hex') };
+  });
+  const manifest = { schema: 1, success: true, head, tree, upstreamTag: 'v1.0.0', artifacts,
+    targets: ['linux/amd64', 'windows/amd64', 'android/arm64'],
+    checks: ['sync-fixtures', 'root-go-tests', 'baidu-race-tests', 'config-smoke', 'e2e-loopback'] };
+  const manifestPath = join(directory, 'VALIDATION.json');
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  writeFileSync(join(directory, 'SHA256SUMS'), artifacts.map(item => `${item.sha256}  ${item.filename}\n`).join(''));
+  const workflow = readFileSync(new URL('../.github/workflows/baidu-build.yml', import.meta.url), 'utf8');
+  const match = /node --input-type=module <<'NODE'[^\n]*\n([\s\S]*?)^\s*NODE\s*$/m.exec(workflow);
+  assert(match, 'the release provenance gate must remain in the workflow');
+  const lines = match[1].split(/\r?\n/);
+  const indent = Math.min(...lines.filter(line => line.trim()).map(line => /^\s*/.exec(line)[0].length));
+  const script = lines.map(line => line.slice(indent)).join('\n');
+  const check = () => spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    cwd: f.custom, env: { ...process.env, GITHUB_SHA: head }, encoding: 'utf8',
+  });
+  const valid = check();
+  assert.equal(valid.status, 0, valid.stderr);
+  assert.equal(valid.stdout.trim(), 'upstream_tag=v1.0.0');
+  writeFileSync(manifestPath, JSON.stringify({ ...manifest, head: '0'.repeat(40) }));
+  assert.notEqual(check().status, 0, 'artifacts from another commit must not pass');
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  writeFileSync(join(directory, artifacts[0].filename), 'changed after validation');
+  assert.notEqual(check().status, 0, 'changed archive bytes must not pass');
 });

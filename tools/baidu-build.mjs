@@ -32,8 +32,9 @@ try {
   const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : null;
   const upstreamTag = readFileSync(VERSION_FILE, 'utf8').trim();
   stableParts(upstreamTag);
+  if (git('status', '--porcelain')) throw new Error('Validation requires a clean committed checkout.');
   const head = git('rev-parse', 'HEAD');
-  const tree = git('write-tree');
+  const tree = git('rev-parse', 'HEAD^{tree}');
   if (state && (state.mergeCommit !== head || state.tag !== upstreamTag))
     throw new Error('Sync state does not match this candidate checkout.');
   if (!readdirSync('protocol/baidu').some(name => name.endsWith('_test.go')))
@@ -91,7 +92,7 @@ try {
     } else run('tar', ['-czf', archive, '-C', buildRoot, directoryName]);
     artifacts.push({ filename, sha256: sha256(archive) });
   }
-  if (git('rev-parse', 'HEAD') !== head || git('write-tree') !== tree || git('diff', '--name-only'))
+  if (git('rev-parse', 'HEAD') !== head || git('rev-parse', 'HEAD^{tree}') !== tree || git('status', '--porcelain'))
     throw new Error('Tracked sources changed during validation; no success receipt was written.');
   writeFileSync(join(packageRoot, 'SHA256SUMS'), artifacts.map(item => `${item.sha256}  ${item.filename}\n`).join(''));
   const receipt = { schema: 1, success: true, head, tree, upstreamTag, version,
