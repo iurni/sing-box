@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { compareTags, latestStableTag, parseReleasePages, prepare, publish, recordBaseline, VERSION_FILE, BASELINE_FILE } from './baidu-sync.mjs';
+import { compareTags, latestStableTag, parseReleasePages, fetchReleaseMetadata, RELEASE_QUERY, RELEASE_JQ, prepare, publish, recordBaseline, VERSION_FILE, BASELINE_FILE } from './baidu-sync.mjs';
 
 function git(cwd, ...args) {
   const result = spawnSync('git', ['-c', 'core.autocrlf=false', ...args], { cwd, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
@@ -255,4 +255,43 @@ test('reverted testing merge cannot silently suppress a later stable change', t 
   assert.throws(() => candidate(f), /differs from the independently calculated stable tree/);
   assert.equal(git(f.custom, 'branch', '--show-current'), 'codex/baidu');
   assert.equal(remoteHead(f), f.base);
+});
+
+
+test('GraphQL release query preserves all pages and selects highest stable version', () => {
+  let calls = 0;
+  const run = (program, args) => {
+    calls++;
+    assert.equal(program, 'gh');
+    assert(args.includes('--paginate'));
+    assert(args.includes(`query=${RELEASE_QUERY}`));
+    assert(args.includes(RELEASE_JQ));
+    assert.match(RELEASE_QUERY, /hasNextPage endCursor/);
+    assert.match(RELEASE_JQ, /tag_name:\.tagName,draft:\.isDraft,prerelease:\.isPrerelease/);
+    return { status: 0, stdout: '[{"tag_name":"v1.9.9","draft":false,"prerelease":false}]\n' +
+      '[{"tag_name":"v1.10.2","draft":false,"prerelease":false},{"tag_name":"v9.0.0","draft":false,"prerelease":true}]\n' };
+  };
+  assert.equal(latestStableTag(fetchReleaseMetadata({ run })), 'v1.10.2');
+  assert.equal(calls, 1);
+});
+
+test('release query discards partial pages and retries transient errors only', () => {
+  let calls = 0; const waits = [];
+  const run = () => ++calls === 1
+    ? { status: 1, stdout: '[{"tag_name":"v99.0.0"}]\n', stderr: 'HTTP 504: Gateway Timeout' }
+    : { status: 0, stdout: '[{"tag_name":"v1.2.3","draft":false,"prerelease":false}]\n' };
+  const results = fetchReleaseMetadata({ run, wait: ms => waits.push(ms) });
+  assert.equal(latestStableTag(results), 'v1.2.3');
+  assert.deepEqual(waits, [1000]);
+  assert.equal(calls, 2);
+});
+
+test('release query stops immediately on permanent errors and bounds transient failures', () => {
+  let calls = 0;
+  assert.throws(() => fetchReleaseMetadata({ run: () => { calls++; return { status: 1, stderr: 'HTTP 401: Unauthorized' }; }, wait: () => assert.fail('must not retry') }), /401/);
+  assert.equal(calls, 1);
+  calls = 0; const waits = [];
+  assert.throws(() => fetchReleaseMetadata({ run: () => { calls++; return { status: 1, stderr: 'HTTP 503: Service Unavailable' }; }, wait: ms => waits.push(ms) }), /503/);
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [1000, 2000]);
 });

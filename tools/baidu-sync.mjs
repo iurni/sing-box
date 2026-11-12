@@ -42,6 +42,39 @@ export function parseReleasePages(jsonLines) {
   });
 }
 
+// The REST releases endpoint returns every asset on every page and frequently
+// times out on large releases. GraphQL retrieves only the three fields needed
+// for choosing a version, while still examining every page.
+export const RELEASE_QUERY = `query($endCursor: String) {
+  repository(owner: "SagerNet", name: "sing-box") {
+    releases(first: 100, after: $endCursor) {
+      nodes { tagName isDraft isPrerelease }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+export const RELEASE_JQ = '[.data.repository.releases.nodes[] | {tag_name:.tagName,draft:.isDraft,prerelease:.isPrerelease}]';
+
+function transientReleaseError(result) {
+  const message = `${result.stderr || ''} ${result.stdout || ''} ${result.error?.message || ''}`;
+  return /\bHTTP (?:429|5\d\d)\b|\b(?:ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH)\b|\b(?:connection reset|connection timed out|timeout awaiting|TLS handshake timeout|unexpected EOF)\b/i.test(message) ||
+    ['ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH'].includes(result.error?.code);
+}
+
+export function fetchReleaseMetadata({ cwd = process.cwd(), run = spawnSync,
+  wait = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms) } = {}) {
+  const args = ['api', 'graphql', '--paginate', '-f', `query=${RELEASE_QUERY}`, '--jq', RELEASE_JQ];
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const result = run('gh', args, { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 60000, env: process.env });
+    if (!result.error && result.status === 0) return parseReleasePages(result.stdout || '');
+    if (!transientReleaseError(result) || attempt === 2) {
+      throw new Error(`GitHub release query failed (${result.status ?? result.error?.code ?? 'unknown'}).\n${result.stderr || ''}${result.error?.message || ''}`);
+    }
+    // Retry the complete paginated query, discarding any partial page output.
+    wait(1000 * (2 ** attempt));
+  }
+}
+
 function command(program, args, cwd, options = {}) {
   const result = spawnSync(program, args, {
     cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024,
@@ -133,9 +166,7 @@ export function prepare({ cwd = process.cwd(), tag, upstream = OFFICIAL_URL, dry
     if (release.tag_name !== tag || release.draft || release.prerelease)
       throw new Error('Requested tag is not a published official stable release.');
   } else if (!tag) {
-    const json = command('gh', ['api', '--paginate', `repos/${OFFICIAL_REPOSITORY}/releases?per_page=100`,
-      '--jq', '[.[] | {tag_name,draft,prerelease}]'], cwd);
-    tag = latestStableTag(parseReleasePages(json));
+    tag = latestStableTag(fetchReleaseMetadata({ cwd }));
   }
   stableParts(tag);
   const base = command('git', ['rev-parse', 'HEAD'], cwd);
