@@ -4,6 +4,9 @@
 它新增 `type: "baidu"` 出站，保留上游内核功能。当前上游稳定版记录在
 [版本标记](.github/baidu-upstream-version) 中。
 
+本分支也支持 `type: "mieru"` 入站和出站，配置和限制见
+[mieru 出站](docs/configuration/outbound/mieru.zh.md)及[入站](docs/configuration/inbound/mieru.zh.md)。
+
 协议根据用户提供的 Android 核心进行静态分析，再独立编写源码。
 请求会发送真实目标地址，以及 `Host`、`User-Agent` 和 `X-T5-Auth` 三个头。
 普通 HTTP 出站的 `del_host` 或自定义请求行不能替代这个出站。

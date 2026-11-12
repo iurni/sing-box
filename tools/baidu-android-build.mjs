@@ -156,12 +156,27 @@ export function overlayHookErrorClient(text) {
             @Suppress("UNCHECKED_CAST")
             Result(logs = slice.list as List<LogEntry>, hasWarnings = hasWarnings)
         }`;
-  const block = query.replace('        return ', '        ').replace(`            try {
+  // v1.14.4 also handles malformed parcelables; keep that protection intact.
+  // Match either known upstream body exactly so an unreviewed IPC change
+  // continues to block publication.
+  const queryV1144 = query.replace(
+    '            val slice = ParceledListSlice.CREATOR.createFromParcel(reply, LogEntry::class.java.classLoader)',
+    `            val slice =
+                try {
+                    ParceledListSlice.CREATOR.createFromParcel(reply, LogEntry::class.java.classLoader)
+                } catch (e: BadParcelableException) {
+                    return@withParcel failureResult(Failure.REMOTE_ERROR, e.message)
+                }`,
+  );
+  const variants = [query, queryV1144].filter(candidate => text.split(candidate).length === 2);
+  if (variants.length !== 1) throw new Error('Upstream Android optional hook error IPC changed; update the build overlay before releasing.');
+  const selected = variants[0];
+  const block = selected.replace('        return ', '        ').replace(`            try {
                 reply.readException()
             } catch (e: RemoteException) {
                 return@withParcel failureResult(Failure.REMOTE_ERROR, e.message)
             }`, '            reply.readException()');
-  return replaceOnce(text, query, `        return try {
+  return replaceOnce(text, selected, `        return try {
 ${block.split('\n').map(line => `    ${line}`).join('\n')}
         } catch (e: SecurityException) {
             failureResult(Failure.REMOTE_ERROR, e.message)
@@ -273,6 +288,8 @@ export function validateNativeCore(native, version) {
     throw new Error('APK libbox is not an ELF64 AArch64 library.');
   if (!native.includes(Buffer.from('github.com/sagernet/sing-box/protocol/baidu')) || !native.includes(Buffer.from(version)))
     throw new Error('The APK does not contain this custom Baidu core / expected core version.');
+  if (!native.includes(Buffer.from('github.com/sagernet/sing-box/protocol/mieru.NewOutbound')))
+    throw new Error('The APK libbox does not contain the custom mieru outbound.');
 }
 
 export function validateSignature(signature, expectedCertificate) {
@@ -441,7 +458,7 @@ async function main() {
     const artifacts = [filename, 'SFA-version-metadata.json'].map(filename => ({ filename, sha256: sha256(join(output, filename)) }));
     const receipt = { schema: 1, success: true, head, tree, upstreamTag, version, versionCode, applicationId: APP_ID,
       appSource: client.commit, appSourceRepository: CLIENT_URL, target: 'android/arm64-v8a', minSdk: 24, goVersion: requirements.goVersion,
-      certificateSha256: certificate, signerSHA256: certificate, coreContainsBaidu: true,
+      certificateSha256: certificate, signerSHA256: certificate, coreContainsBaidu: true, coreContainsMieru: true,
       librarySha256: sha256(library), apkLibboxSha256: sha256(nativePath),
       buildTags: tags, checks: ['official-pinned-client', 'official-client-go-toolchain', 'custom-libbox-built-from-core', 'apk-assembly', 'apk-signature', 'package-id', 'version-metadata', 'arm64-v8a-only', 'elf64-aarch64-libbox', 'baidu-core-provenance'], artifacts };
     writeFileSync(join(output, 'ANDROID-VALIDATION.json'), `${JSON.stringify(receipt, null, 2)}\n`);

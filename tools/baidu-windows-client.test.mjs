@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
-import { assertClientOverlayPaths, executableContentDigest, planWindowsPatches, portableExecutableMachine, validateChangedSourceScope } from './baidu-windows-client.mjs';
+import { assertClientOverlayPaths, executableContentDigest, planWindowsPatches, portableExecutableMachine, validateChangedSourceScope, validateCustomOutbounds } from './baidu-windows-client.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 
@@ -76,6 +76,14 @@ test('PE validation checks AMD64 and distinguishes code changes from Authenticod
   signed[300] ^= 1;
   assert.notEqual(executableContentDigest(unsigned), executableContentDigest(signed));
   assert.throws(() => portableExecutableMachine(Buffer.alloc(128)), /PE executable/);
+});
+
+test('packaged daemon must include both custom outbound implementations', () => {
+  const baidu = 'github.com/sagernet/sing-box/protocol/baidu.NewOutbound';
+  const mieru = 'github.com/sagernet/sing-box/protocol/mieru.NewOutbound';
+  assert.doesNotThrow(() => validateCustomOutbounds(Buffer.from(`${baidu}\0${mieru}`)));
+  assert.throws(() => validateCustomOutbounds(Buffer.from(baidu)), /missing the mieru outbound/);
+  assert.throws(() => validateCustomOutbounds(Buffer.from(mieru)), /missing the baidu outbound/);
 });
 
 test('unsafe or non-monotonic client version inputs are refused', () => {

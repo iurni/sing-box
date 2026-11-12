@@ -11,6 +11,7 @@ const (
 	TypeSOCKS              = "socks"
 	TypeHTTP               = "http"
 	TypeBaidu              = "baidu"
+	TypeMieru              = "mieru"
 	TypeMixed              = "mixed"
 	TypeShadowsocks        = "shadowsocks"
 	TypeSnell              = "snell"
@@ -71,6 +72,8 @@ func ProxyDisplayName(proxyType string) string {
 		return "SOCKS"
 	case TypeHTTP:
 		return "HTTP"
+	case TypeMieru:
+		return "mieru"
 	case TypeBaidu:
 		return "Baidu"
 	case TypeMixed:

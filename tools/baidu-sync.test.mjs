@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { compareTags, latestStableTag, parseReleasePages, prepare, publish, VERSION_FILE } from './baidu-sync.mjs';
+import { compareTags, latestStableTag, parseReleasePages, prepare, publish, recordBaseline, VERSION_FILE, BASELINE_FILE } from './baidu-sync.mjs';
 
 function git(cwd, ...args) {
   const result = spawnSync('git', ['-c', 'core.autocrlf=false', ...args], { cwd, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
@@ -38,6 +38,8 @@ function fixture(t) {
   write(custom, 'baidu.txt', 'custom protocol\n');
   git(custom, 'add', '.');
   git(custom, 'commit', '-m', 'Custom protocol');
+  recordBaseline({ cwd: custom, upstream });
+  git(custom, 'add', BASELINE_FILE); git(custom, 'commit', '-m', 'Review stable baseline');
   git(root, 'init', '--bare', remote);
   git(custom, 'remote', 'set-url', 'origin', remote);
   git(custom, 'push', '-u', 'origin', 'codex/baidu');
@@ -48,6 +50,8 @@ function nextRelease(f, { conflict = false, tag = 'v1.0.1' } = {}) {
     write(f.custom, 'upstream.txt', 'custom side\n');
     git(f.custom, 'add', '.');
     git(f.custom, 'commit', '-m', 'Custom edit');
+    recordBaseline({ cwd: f.custom, upstream: f.upstream });
+    git(f.custom, 'add', BASELINE_FILE); git(f.custom, 'commit', '-m', 'Review custom edit');
     git(f.custom, 'push', 'origin', 'codex/baidu');
     f.base = git(f.custom, 'rev-parse', 'HEAD');
   }
@@ -121,7 +125,7 @@ test('prepare preserves custom code and keeps baidu and the remote unchanged', t
 
 test('merge conflicts abort and restore the original custom checkout', t => {
   const f = fixture(t); nextRelease(f, { conflict: true });
-  assert.throws(() => candidate(f), /failed/);
+  assert.throws(() => candidate(f), /conflicts|failed/);
   assert.equal(git(f.custom, 'branch', '--show-current'), 'codex/baidu');
   assert.equal(git(f.custom, 'rev-parse', 'HEAD'), f.base);
   assert.equal(git(f.custom, 'status', '--porcelain'), '');
@@ -136,6 +140,8 @@ test('a stable minor release from a parallel upstream branch still merges shared
   git(f.custom, 'merge', '--no-ff', '--no-edit', 'FETCH_HEAD');
   write(f.custom, VERSION_FILE, 'v1.0.1\n');
   git(f.custom, 'add', VERSION_FILE); git(f.custom, 'commit', '-m', 'Track old stable patch');
+  recordBaseline({ cwd: f.custom, upstream: f.upstream });
+  git(f.custom, 'add', BASELINE_FILE); git(f.custom, 'commit', '-m', 'Review stable patch');
   git(f.custom, 'push', 'origin', 'codex/baidu');
   f.base = git(f.custom, 'rev-parse', 'HEAD');
   git(f.upstream, 'switch', '-c', 'next-minor', 'v1.0.0');
@@ -226,5 +232,27 @@ test('the old core-only success receipt cannot publish without both signed clien
   assert.throws(() => publish({ cwd: f.custom }), /every required check/);
   receipt(f, state, { checks: ['sync-fixtures', 'root-go-tests', 'baidu-race-tests', 'config-smoke', 'e2e-loopback'] });
   assert.throws(() => publish({ cwd: f.custom }), /every required check/);
+  assert.equal(remoteHead(f), f.base);
+});
+
+test('unreviewed testing tree drift is rejected even when already current', t => {
+  const f = fixture(t);
+  write(f.custom, 'upstream.txt', 'unreleased testing change\n');
+  git(f.custom, 'add', '.'); git(f.custom, 'commit', '-m', 'Accidentally merge testing');
+  assert.throws(() => prepare({ cwd: f.custom, upstream: f.upstream, tag: 'v1.0.0' }), /baseline mismatch/);
+  assert.equal(remoteHead(f), f.base);
+});
+
+test('reverted testing merge cannot silently suppress a later stable change', t => {
+  const f = fixture(t); nextRelease(f);
+  git(f.custom, 'fetch', f.upstream, 'refs/tags/v1.0.1');
+  git(f.custom, 'merge', '--no-ff', '--no-edit', 'FETCH_HEAD');
+  const merge = git(f.custom, 'rev-parse', 'HEAD');
+  git(f.custom, 'revert', '--no-edit', '-m', '1', merge);
+  recordBaseline({ cwd: f.custom, upstream: f.upstream });
+  // The reviewed tree after revert is exactly the original baseline.
+  assert.equal(git(f.custom, 'status', '--porcelain'), '');
+  assert.throws(() => candidate(f), /differs from the independently calculated stable tree/);
+  assert.equal(git(f.custom, 'branch', '--show-current'), 'codex/baidu');
   assert.equal(remoteHead(f), f.base);
 });

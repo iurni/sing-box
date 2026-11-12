@@ -1,5 +1,7 @@
 本版本由官方正式稳定版及百度出站补丁的源码构建，提供上游图形界面的定制安装包：
 
+内核同时支持 `baidu` 出站和 `mieru` 入站、出站。mieru 配置字段及限制见仓库的协议文档；本机自动测试覆盖 TCP、UDP 传输和 SOCKS 前置。
+
 - Windows amd64：下载 `SFW-…-x64.exe` 安装图形客户端，包含本 fork 的百度 daemon。
 - Android arm64-v8a：下载 `SFA-Baidu-…-arm64-v8a.apk`，最低 Android 7，包含本 fork 的 libbox。
 - 原有 Windows / Android / Linux 命令行核心压缩包仍保留。

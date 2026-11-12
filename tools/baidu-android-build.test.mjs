@@ -96,6 +96,17 @@ test('Optional hook error-log IPC preserves result failures and catches transpor
   assert.throws(() => overlayHookErrorClient(patched), /changed; update the build overlay/);
 });
 
+test('Android 1.14.4 error IPC preserves malformed-parcel handling and rejects unreviewed changes', () => {
+  const upstream = readFileSync(new URL('./fixtures/HookErrorClient-v1.14.4.kt', import.meta.url), 'utf8');
+  const patched = overlayHookErrorClient(upstream);
+  assert.match(patched, /return try \{\n\s+ConnectivityBinderUtils\.withParcel/);
+  assert.deepEqual([...patched.matchAll(/catch \(e: ([^)]+)\)/g)].map(match => match[1]),
+    ['BadParcelableException', 'SecurityException', 'RemoteException']);
+  assert.match(patched, /catch \(e: BadParcelableException\) \{\n\s+return@withParcel failureResult\(Failure\.REMOTE_ERROR, e\.message\)/);
+  assert.throws(() => overlayHookErrorClient(upstream.replace('TRANSACTION_GET_ERRORS', 'NEW_TRANSACTION_GET_ERRORS')), /changed; update the build overlay/);
+  assert.throws(() => overlayHookErrorClient(patched), /changed; update the build overlay/);
+});
+
 test('APK metadata gate rejects another package, ABI, version or minimum SDK', () => {
   const correct = `package: name='${APP_ID}' versionCode='1791958400' versionName='1.14.3-baidu.1234'\napplication-label:'SFA Baidu'\nsdkVersion:'24'\nnative-code: 'arm64-v8a'`;
   assert.doesNotThrow(() => validateBadging(correct, '1.14.3-baidu.1234', 1791958400));
@@ -123,13 +134,15 @@ test('Native core gate refuses a wrong ELF architecture or stock library', () =>
   const header = Buffer.alloc(64);
   header.set([0x7f, 0x45, 0x4c, 0x46, 2, 1]);
   header.writeUInt16LE(183, 18);
-  const native = Buffer.concat([header, Buffer.from('github.com/sagernet/sing-box/protocol/baidu\0v1.14.3-baidu.1234')]);
+  const native = Buffer.concat([header, Buffer.from('github.com/sagernet/sing-box/protocol/baidu\0github.com/sagernet/sing-box/protocol/mieru.NewOutbound\0v1.14.3-baidu.1234')]);
   assert.doesNotThrow(() => validateNativeCore(native, '1.14.3-baidu.1234'));
   const otherArchitecture = Buffer.from(native);
   otherArchitecture.writeUInt16LE(62, 18);
   assert.throws(() => validateNativeCore(otherArchitecture, '1.14.3-baidu.1234'), /AArch64/);
   assert.throws(() => validateNativeCore(header, '1.14.3-baidu.1234'), /custom Baidu/);
   assert.throws(() => validateNativeCore(native, '1.14.3-baidu.9999'), /expected core version/);
+  const withoutMieru = Buffer.concat([header, Buffer.from('github.com/sagernet/sing-box/protocol/baidu\0v1.14.3-baidu.1234')]);
+  assert.throws(() => validateNativeCore(withoutMieru, '1.14.3-baidu.1234'), /mieru outbound/);
 });
 
 test('APK signature gate recognizes v3.1 SDK ranges without accepting a different signer', () => {

@@ -154,6 +154,7 @@ export function collectRelease({ cwd = process.cwd(), coreDirectory, windowsDire
   ]) {
     assert.equal(receipt.target, target);
     assert.equal(receipt.coreContainsBaidu, true, 'The client must contain the custom Baidu core.');
+    assert.equal(receipt.coreContainsMieru, true, 'The client must contain the mieru protocol.');
     assert.match(fingerprint || '', /^[a-fA-F0-9]{64}$/, 'Pinned signing certificate fingerprint is required.');
     assert.equal(receipt.signerSHA256.toLowerCase(), fingerprint.toLowerCase(), 'Client signing certificate changed.');
     assert(receipt.artifacts.some(item => item.filename.endsWith(extension)), `Missing ${extension} installer.`);

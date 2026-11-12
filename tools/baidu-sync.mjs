@@ -2,11 +2,12 @@
 // Prepare and publish a normal merge of an official stable release. Never force-push.
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const VERSION_FILE = '.github/baidu-upstream-version';
+export const BASELINE_FILE = '.github/baidu-stable-baseline.json';
 export const OFFICIAL_REPOSITORY = 'SagerNet/sing-box';
 export const OFFICIAL_URL = 'https://github.com/SagerNet/sing-box.git';
 export const TARGET_BRANCH = 'codex/baidu';
@@ -77,6 +78,44 @@ function fetchRelease(cwd, upstream, tag) {
   return command('git', ['rev-parse', 'FETCH_HEAD^{commit}'], cwd);
 }
 
+// Fingerprint every committed fork difference against the recorded stable tag.
+// The baseline is intentionally excluded to avoid a self-referential digest.
+function baselineDigest(cwd, upstreamCommit, tree = 'HEAD') {
+  const diff = command('git', ['diff', '--raw', '--no-abbrev', '--no-renames', '-z', upstreamCommit, tree,
+    '--', '.', `:(exclude)${BASELINE_FILE}`], cwd);
+  return createHash('sha256').update(diff).digest('hex');
+}
+
+export function recordBaseline({ cwd = process.cwd(), upstream = OFFICIAL_URL } = {}) {
+  cwd = resolve(cwd);
+  const tag = readFileSync(join(cwd, VERSION_FILE), 'utf8').trim();
+  const commit = fetchRelease(cwd, upstream, tag);
+  const fingerprint = baselineDigest(cwd, commit);
+  writeFileSync(join(cwd, BASELINE_FILE), `${JSON.stringify({ schema: 1, tag, upstreamCommit: commit, fingerprint }, null, 2)}\n`);
+}
+
+function assertBaseline(cwd, tag, commit) {
+  if (!existsSync(join(cwd, BASELINE_FILE)))
+    throw new Error('Stable baseline is missing; review the full upstream diff and record it before syncing.');
+  const baseline = JSON.parse(readFileSync(join(cwd, BASELINE_FILE), 'utf8'));
+  if (baseline.schema !== 1 || baseline.tag !== tag || baseline.upstreamCommit !== commit ||
+      baseline.fingerprint !== baselineDigest(cwd, commit))
+    throw new Error('Stable baseline mismatch: fork changes or upstream tree changed; review the full diff and record a new baseline.');
+}
+
+// Give merge-tree an artificial first parent based on the recorded tag, so its
+// merge base cannot be skewed by a later testing merge in the real history.
+function expectedStableMerge(cwd, base, previousCommit, releaseCommit) {
+  const tree = command('git', ['rev-parse', `${base}^{tree}`], cwd);
+  const synthetic = command('git', ['-c', 'commit.gpgsign=false', 'commit-tree', tree,
+    '-p', previousCommit, '-m', 'Temporary stable merge validation'], cwd);
+  const result = command('git', ['merge-tree', '--write-tree', synthetic, releaseCommit], cwd,
+    { allowFailure: true });
+  if (!result || !/^[0-9a-f]{40,64}$/.test(result))
+    throw new Error('Stable merge has conflicts; review manually before syncing.');
+  return result;
+}
+
 export function prepare({ cwd = process.cwd(), tag, upstream = OFFICIAL_URL, dryRun = false } = {}) {
   cwd = resolve(cwd);
   assertClean(cwd);
@@ -99,12 +138,13 @@ export function prepare({ cwd = process.cwd(), tag, upstream = OFFICIAL_URL, dry
     tag = latestStableTag(parseReleasePages(json));
   }
   stableParts(tag);
+  const base = command('git', ['rev-parse', 'HEAD'], cwd);
+  const previousCommit = fetchRelease(cwd, upstream, previous);
+  assertBaseline(cwd, previous, previousCommit);
   if (compareTags(tag, previous) <= 0) {
     output({ changed: false, tag, previous });
     return { changed: false, tag, previous };
   }
-  const base = command('git', ['rev-parse', 'HEAD'], cwd);
-  const previousCommit = fetchRelease(cwd, upstream, previous);
   if (command('git', ['merge-base', '--is-ancestor', previousCommit, base], cwd, { allowFailure: true }) === null)
     throw new Error('Recorded upstream release is not an ancestor of the custom branch; stop and review the version marker.');
   const releaseCommit = fetchRelease(cwd, upstream, tag);
@@ -112,6 +152,7 @@ export function prepare({ cwd = process.cwd(), tag, upstream = OFFICIAL_URL, dry
   // Shared history is enough; a normal merge and the test gates handle divergence.
   if (command('git', ['merge-base', previousCommit, releaseCommit], cwd, { allowFailure: true }) === null)
     throw new Error('New stable tag has no common history with the previous release; upstream history needs manual review.');
+  const expectedTree = expectedStableMerge(cwd, base, previousCommit, releaseCommit);
   if (dryRun) {
     output({ changed: true, dry_run: true, tag, previous, base, upstream_commit: releaseCommit });
     return { changed: true, tag, previous, base, releaseCommit };
@@ -120,11 +161,16 @@ export function prepare({ cwd = process.cwd(), tag, upstream = OFFICIAL_URL, dry
   command('git', ['switch', '-c', candidate], cwd, { inherit: true });
   try {
     command('git', ['merge', '--no-ff', '--no-edit', '-m', `Merge official sing-box ${tag}`, releaseCommit], cwd, { inherit: true });
+    if (command('git', ['rev-parse', 'HEAD^{tree}'], cwd) !== expectedTree)
+      throw new Error('Merge differs from the independently calculated stable tree; testing history may have hidden upstream changes.');
     writeFileSync(join(cwd, VERSION_FILE), `${tag}\n`);
     command('git', ['add', '--', VERSION_FILE], cwd);
     // Build exactly this committed tree. The publication step must not create a
     // different source commit after BUILD-INFO/VALIDATION have been generated.
     command('git', ['commit', '-m', `Track upstream ${tag} for validation`], cwd, { inherit: true });
+    recordBaseline({ cwd, upstream });
+    command('git', ['add', '--', BASELINE_FILE], cwd);
+    command('git', ['commit', '--amend', '--no-edit'], cwd, { inherit: true });
     const state = { schema: 1, branch: TARGET_BRANCH, candidate, base, previous, tag,
       releaseCommit, mergeCommit: command('git', ['rev-parse', 'HEAD'], cwd) };
     writeFileSync(filePaths.state, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
@@ -133,7 +179,7 @@ export function prepare({ cwd = process.cwd(), tag, upstream = OFFICIAL_URL, dry
     return state;
   } catch (error) {
     command('git', ['merge', '--abort'], cwd, { allowFailure: true });
-    command('git', ['restore', '--source=HEAD', '--staged', '--worktree', '--', VERSION_FILE], cwd, { allowFailure: true });
+    command('git', ['restore', '--source=HEAD', '--staged', '--worktree', '--', VERSION_FILE, BASELINE_FILE], cwd, { allowFailure: true });
     command('git', ['switch', branch], cwd, { inherit: true });
     command('git', ['branch', '-D', candidate], cwd);
     throw error;
@@ -171,7 +217,11 @@ export function publish({ cwd = process.cwd(), origin = 'origin' } = {}) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const args = process.argv.slice(2);
-    if (args.includes('--publish')) {
+    if (args.includes('--record-baseline')) {
+      if (args.length !== 1) throw new Error('Baseline recording accepts no extra arguments.');
+      assertClean(process.cwd());
+      recordBaseline();
+    } else if (args.includes('--publish')) {
       if (args.length !== 1) throw new Error('Publish accepts no extra arguments.');
       publish();
     } else {
