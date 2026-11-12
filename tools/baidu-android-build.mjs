@@ -199,11 +199,39 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.Closeable
 
+// A single hidden release-note marker carries the actual APK versionCode.
+// Reject missing, malformed or duplicate markers rather than guessing.
+internal fun baiduVersionCode(body: String?): Int? {
+    if (body == null || Regex("android-version-code").findAll(body).count() != 1) return null
+    val marker = Regex("<!-- android-version-code: ([1-9][0-9]*) -->").find(body) ?: return null
+    return marker.groupValues[1].toIntOrNull()?.takeIf { it > 0 }
+}
+
+internal fun baiduVersionParts(version: String): List<String>? {
+    val pattern = Regex("(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)-baidu[.]([1-9][0-9]*)")
+    return pattern.matchEntire(version)?.groupValues?.drop(1)
+}
+
+internal fun baiduReleaseVersion(tag: String): String? {
+    if (!tag.startsWith("v")) return null
+    val version = tag.substring(1)
+    return if (baiduVersionParts(version) != null) version else null
+}
+
+internal fun baiduVersionIsNewer(version: String, installed: String): Boolean {
+    val next = baiduVersionParts(version) ?: return false
+    val current = baiduVersionParts(installed) ?: return false
+    for ((a, b) in next.zip(current)) {
+        if (a.length != b.length) return a.length > b.length
+        if (a != b) return a > b
+    }
+    return false
+}
+
 // The fork has its own signature and application ID. Never install upstream APKs.
 class GitHubUpdateChecker : Closeable {
     companion object {
         private const val RELEASES_URL = "https://api.github.com/repos/iurni/sing-box/releases"
-        private const val METADATA_FILENAME = "SFA-version-metadata.json"
     }
 
     private val client = Libbox.newHTTPClient().apply {
@@ -222,18 +250,15 @@ class GitHubUpdateChecker : Closeable {
         request.setUserAgent(HTTPClient.userAgent)
         val release = json.decodeFromString<GitHubRelease>(request.execute().content.unwrap)
         if (release.draft || release.prerelease) return null
-        val metadataAsset = release.assets.find { it.name == METADATA_FILENAME } ?: return null
-        val metadataRequest = client.newRequest()
-        metadataRequest.setURL(metadataAsset.browserDownloadUrl)
-        metadataRequest.setUserAgent(HTTPClient.userAgent)
-        val metadata = json.decodeFromString<VersionMetadata>(metadataRequest.execute().content.unwrap)
-        if (metadata.applicationId != BuildConfig.APPLICATION_ID || metadata.versionCode <= BuildConfig.VERSION_CODE) return null
-        val asset = release.assets.find {
-            it.name.startsWith("SFA-Baidu-") && it.name.endsWith("-arm64-v8a.apk")
+        val version = baiduReleaseVersion(release.tagName) ?: return null
+        val versionCode = baiduVersionCode(release.body) ?: return null
+        if (versionCode <= BuildConfig.VERSION_CODE || !baiduVersionIsNewer(version, BuildConfig.VERSION_NAME)) return null
+        val asset = release.assets.singleOrNull {
+            it.name == "SFA-Baidu-$version-arm64-v8a.apk"
         } ?: return null
         return UpdateInfo(
-            versionCode = metadata.versionCode,
-            versionName = metadata.versionName,
+            versionCode = versionCode,
+            versionName = version,
             downloadUrl = asset.browserDownloadUrl,
             releaseUrl = release.htmlUrl,
             releaseNotes = release.body,
@@ -249,6 +274,7 @@ class GitHubUpdateChecker : Closeable {
         val body: String? = null,
         val draft: Boolean = false,
         val prerelease: Boolean = false,
+        @SerialName("tag_name") val tagName: String = "",
         @SerialName("html_url") val htmlUrl: String = "",
         val assets: List<GitHubAsset> = emptyList(),
     )
@@ -257,12 +283,6 @@ class GitHubUpdateChecker : Closeable {
         val name: String = "",
         @SerialName("browser_download_url") val browserDownloadUrl: String = "",
         val size: Long = 0,
-    )
-    @Serializable
-    data class VersionMetadata(
-        @SerialName("version_code") val versionCode: Int = 0,
-        @SerialName("version_name") val versionName: String = "",
-        @SerialName("application_id") val applicationId: String = "",
     )
 }
 `;

@@ -8,8 +8,10 @@ built from the same custom core commit as the release, including `type: "baidu"`
 The application ID is `io.github.iurni.singbox.baidu`. It can coexist with the
 official `io.nekohasekai.sfa` application and has separate profiles and settings.
 Its updater checks stable releases of `iurni/sing-box`, chooses the arm64-v8a APK,
-and compares the version code in `SFA-version-metadata.json`. It never downloads
-an official SagerNet APK as an update to the custom application.
+and compares the version code recorded in the release notes. It never downloads
+an official SagerNet APK as an update to the custom application. Older fork APKs
+require the removed `SFA-version-metadata.json` asset and must be updated once by
+manually installing a newer APK signed with the same fork key.
 
 Import a complete sing-box JSON profile, or paste it into the local profile
 editor. Import and editor validation use the bundled custom `Libbox.checkConfig`;

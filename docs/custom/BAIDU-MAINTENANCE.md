@@ -9,7 +9,7 @@
 - `SFW-<版本>-x64.exe`：Windows amd64 图形客户端安装程序，包含从本分支源码编译的百度 daemon。
 - `SFA-Baidu-<版本>-arm64-v8a.apk`：Android arm64-v8a 图形客户端，包含本分支 libbox；最低 Android 7。
 - Windows amd64、Android arm64 和 Linux amd64 的原有命令行核心压缩包。
-- `SHA256SUMS`、`VALIDATION.json` 及每个平台的验证记录。
+- 验证与校验文件保留在对应 GitHub Actions 运行的附件中，不再放在 Release 页面。
 
 App 采用独立安装身份、配置目录和更新来源。Android 的应用 ID 和 Windows 的服务、IPC、安装注册表身份独立于官方客户端，可保留原客户端；它们不会自动继承官方客户端的配置。Windows 使用本 fork 的持久自签代码签名证书，首次安装仍可能显示 Windows 的未知发行者或 SmartScreen 提示；签名身份和 daemon 的校验保持启用。Android 也使用持久自有签名，可由后续本 fork APK 原地更新，不能作为官方 APK 的同签更新包。
 
@@ -26,7 +26,7 @@ Windows、Android 的客户端源码固定为候选稳定提交中的 `clients/d
 5. Android 编译 libbox，生成仅 arm64-v8a 的 APK，检查 ELF64/AArch64、版本、应用身份、百度协议包含性及持久签名。Windows 原生构建安装 EXE，检查 AMD64、GUI/daemon 版本、源码编译的百度 daemon、产品与包布局、全部组件签名，并用真实上游 daemon 的证书校验逻辑验证自签身份。
 6. 只有三个 job 全部通过，汇总 job 才验证提交、客户端 gitlink、版本、证书指纹和每个附件的 SHA256，生成 schema 2 总验证记录并上传完整安装包集合。
 7. 同步任务普通推送经过验证的同一提交。远端若在构建期间前进，停止推送。不强推，不重置远端，不忽略失败。
-8. 创建独立 `vX.Y.Z-baidu.<运行编号>` Release，目标是已验证提交，保留官方标签。
+8. 创建独立 `vX.Y.Z-baidu.<运行编号>` Release，目标是已验证提交，保留官方标签。公开附件仅包含两个客户端和三份核心，文件名使用同一运行编号；Android 版本码记录在 Release 说明的隐藏注释中。
 
 任一核心/App 的补丁、测试、编译、签名或验收失败，都不更新维护分支和 Release。旧 schema 1 核心验证记录不能单独批准同步。GitHub 的 `GITHUB_TOKEN` 推送不会再触发普通 push 工作流，所以同步任务自己完成三个构建与发布。原有上游工作流文件保留；本 fork 的 Docker/Linux/Stale 工作流在 Actions 设置中单独禁用，避免运行无关发布任务。
 

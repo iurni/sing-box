@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { overlayGradle, overlayHookStatusClient, overlayHookErrorClient, readAndroidRequirements, validateGoToolchain, validateBadging, validateNativeCore, validateSignature, androidUpdateChecker, APP_ID } from './baidu-android-build.mjs';
 
 test('SDK requirements provide an integer platform for gomobile alongside the GUI compile SDK', () => {
@@ -120,14 +121,43 @@ test('APK metadata gate rejects another package, ABI, version or minimum SDK', (
     assert.throws(() => validateBadging(correct.replace(from, to), '1.14.3-baidu.1234', 1791958400));
 });
 
-test('Android updater stays on fork stable APKs and compares metadata version codes', () => {
+test('Android updater stays on fork stable APKs and compares release version codes', () => {
   const updater = androidUpdateChecker();
   assert.match(updater, /repos\/iurni\/sing-box\/releases/);
   assert.match(updater, /release\.draft \|\| release\.prerelease/);
-  assert.match(updater, /metadata\.applicationId != BuildConfig\.APPLICATION_ID/);
-  assert.match(updater, /metadata\.versionCode <= BuildConfig\.VERSION_CODE/);
-  assert.match(updater, /endsWith\("-arm64-v8a\.apk"\)/);
-  assert.doesNotMatch(updater, /SagerNet\/sing-box|compareSemver/);
+  assert.match(updater, /versionCode <= BuildConfig\.VERSION_CODE/);
+  assert.match(updater, /it\.name == "SFA-Baidu-\$version-arm64-v8a\.apk"/);
+  assert.doesNotMatch(updater, /SagerNet\/sing-box|SFA-version-metadata\.json/);
+});
+
+test('actual Android Kotlin parser rejects ambiguous or invalid release metadata', t => {
+  const embedded = process.env.BAIDU_KOTLIN_LIB_DIR;
+  if (!embedded && spawnSync('kotlinc', ['-version']).error?.code === 'ENOENT') {
+    t.skip('Kotlin compiler unavailable; CI runs this test on its Kotlin-equipped runner');
+    return;
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'baidu-android-update-'));
+  try {
+    const updater = androidUpdateChecker();
+    const start = updater.indexOf('internal fun baiduVersionCode(');
+    const end = updater.indexOf('// The fork has its own signature', start);
+    assert(start >= 0 && end > start, 'Kotlin parsing helpers must remain identifiable');
+    const source = join(dir, 'Updater.kt');
+    writeFileSync(source, updater.slice(start, end) + readFileSync('tools/fixtures/AndroidUpdateCheckerTest.kt', 'utf8'));
+    const target = join(dir, 'test.jar');
+    const stdlib = embedded ? join(embedded, 'kotlin-stdlib-2.2.21.jar') : null;
+    const compiler = embedded ? 'java' : 'kotlinc';
+    const args = embedded
+      ? ['-cp', join(embedded, '*'), 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler', '-no-stdlib', '-no-reflect', '-classpath', stdlib, source, '-d', target]
+      : [source, '-include-runtime', '-d', target];
+    const compiled = spawnSync(compiler, args, { encoding: 'utf8', timeout: 120000 });
+    assert.equal(compiled.status, 0, compiled.error || compiled.stderr || compiled.stdout);
+    const run = spawnSync('java', embedded ? ['-cp', `${target}${process.platform === 'win32' ? ';' : ':'}${stdlib}`, 'UpdaterKt'] : ['-jar', target],
+      { encoding: 'utf8', timeout: 30000 });
+    assert.equal(run.status, 0, run.error || run.stderr || run.stdout);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('Native core gate refuses a wrong ELF architecture or stock library', () => {

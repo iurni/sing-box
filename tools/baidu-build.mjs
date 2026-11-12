@@ -46,6 +46,7 @@ try {
 
   run(process.execPath, ['--test', 'tools/baidu-sync.test.mjs']);
   run(process.execPath, ['--test', 'tools/baidu-pipeline.test.mjs']);
+  run(process.execPath, ['--test', 'tools/baidu-public-release.test.mjs']);
   // Same root-module coverage as upstream .github/workflows/test.yml. The separate
   // test/ module needs Docker/services and is deliberately outside this small CI.
   const rootArgs = ['test', '-v', '-count=1', '-timeout=15m', '-exec', 'sudo', '-tags', tags, '-ldflags', sharedFlags, './...'];

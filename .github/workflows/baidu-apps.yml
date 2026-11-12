@@ -173,7 +173,9 @@ jobs:
           read -r -a packages <<< "$SDK_PACKAGES"
           sdkmanager "${packages[@]}"
       - name: Check the Android packaging fixtures
-        run: node --test tools/baidu-android-build.test.mjs
+        run: |
+          kotlinc -version
+          node --test tools/baidu-android-build.test.mjs
       - name: Build, sign, and verify the arm64-v8a APK
         env:
           BAIDU_APP_VERSION: ${{ needs.prepare.outputs.app_version }}
@@ -354,12 +356,19 @@ jobs:
           GH_REPO: ${{ github.repository }}
           EXPECTED_HEAD: ${{ needs.prepare.outputs.source_sha }}
           UPSTREAM_TAG: ${{ needs.prepare.outputs.upstream_tag }}
+          APP_VERSION: ${{ needs.prepare.outputs.app_version }}
+          ANDROID_VERSION_CODE: ${{ needs.prepare.outputs.version_code }}
         run: |
           node tools/baidu-pipeline.mjs verify --directory dist/baidu-release
           remote_head=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/codex/baidu" --jq '.object.sha')
           test "$remote_head" = "$EXPECTED_HEAD"
-          gh release create "${UPSTREAM_TAG}-baidu.${GITHUB_RUN_ID}" dist/baidu-release/* \
+          node tools/baidu-public-release.mjs dist/baidu-release dist/baidu-public "$APP_VERSION"
+          [[ "$ANDROID_VERSION_CODE" =~ ^[1-9][0-9]*$ ]]
+          test "$ANDROID_VERSION_CODE" -le 2147483647
+          cp docs/custom/RELEASE-NOTES.md "$RUNNER_TEMP/release-notes.md"
+          printf '\n<!-- android-version-code: %s -->\n' "$ANDROID_VERSION_CODE" >> "$RUNNER_TEMP/release-notes.md"
+          gh release create "${UPSTREAM_TAG}-baidu.${GITHUB_RUN_ID}" dist/baidu-public/* \
             --target "$EXPECTED_HEAD" \
-            --title "sing-box ${UPSTREAM_TAG} + Baidu apps" \
-            --notes-file docs/custom/RELEASE-NOTES.md \
+            --title "sing-box ${UPSTREAM_TAG} · Baidu / mieru" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
             --latest
