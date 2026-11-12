@@ -51,6 +51,7 @@ try {
   const rootArgs = ['test', '-v', '-count=1', '-timeout=15m', '-exec', 'sudo', '-tags', tags, '-ldflags', sharedFlags, './...'];
   run('go', rootArgs, goHost);
   run('go', ['test', '-race', '-count=1', '-timeout=5m', '-tags', tags, '-ldflags', sharedFlags, './protocol/baidu'], goHost);
+  run('go', ['test', '-race', '-count=1', '-timeout=5m', '-tags', tags, '-ldflags', sharedFlags, './protocol/mieru'], goHost);
 
   const buildRoot = resolve('dist/baidu');
   const packageRoot = resolve('dist/baidu-packages');
@@ -75,7 +76,9 @@ try {
       // check constructs the custom outbound against a loopback dummy address;
       // it does not start TUN or dial a real proxy/target.
       run(binary, ['check', '-c', '.github/baidu-smoke.json']);
+      run(binary, ['check', '-c', '.github/mieru-smoke.json']);
       run(process.execPath, ['tools/baidu-e2e.mjs', binary]);
+      run('python3', ['tools/baidu-mieru-e2e.py', binary]);
     }
     copyFileSync('LICENSE', join(directory, 'LICENSE'));
     writeFileSync(join(directory, 'BUILD-INFO.json'), `${JSON.stringify({

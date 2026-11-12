@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { exportCandidate, importCandidate, collectRelease, verifyRelease, REQUIRED_TARGETS, REQUIRED_CHECKS } from './baidu-pipeline.mjs';
-import { prepare } from './baidu-sync.mjs';
+import { prepare, recordBaseline, BASELINE_FILE } from './baidu-sync.mjs';
 
 const windowsFingerprint = 'a'.repeat(64), androidFingerprint = 'b'.repeat(64);
 const desktopCommit = 'd'.repeat(40), androidCommit = 'e'.repeat(40);
@@ -59,10 +59,10 @@ function packages(f) {
   const coreDirectory = join(f.root, 'core'), windowsDirectory = join(f.root, 'windows'), androidDirectory = join(f.root, 'android');
   const core = { ...common, version: `1.0.0-baidu.${f.head.slice(0, 12)}`, targets: REQUIRED_TARGETS.slice(0, 3), checks: REQUIRED_CHECKS.slice(0, 6),
     artifacts: artifacts(coreDirectory, ['sing-box-1.0.0-baidu.fixture-linux-amd64.tar.gz', 'sing-box-1.0.0-baidu.fixture-windows-amd64.zip', 'sing-box-1.0.0-baidu.fixture-android-arm64.tar.gz']) };
-  const windows = { ...common, version, appSource: desktopCommit, target: 'windows/amd64-gui', signerSHA256: windowsFingerprint, coreContainsBaidu: true,
+  const windows = { ...common, version, appSource: desktopCommit, target: 'windows/amd64-gui', signerSHA256: windowsFingerprint, coreContainsBaidu: true, coreContainsMieru: true,
     checks: ['pinned-sfw-source', 'fork-update-source', 'isolated-installation', 'source-built-baidu-daemon', 'amd64-pe', 'matching-authenticode-signatures', 'installer-product'],
     artifacts: artifacts(windowsDirectory, [`SFW-${version}-x64.exe`]) };
-  const android = { ...common, version, versionCode: 1800000000, appSource: androidCommit, target: 'android/arm64-v8a', signerSHA256: androidFingerprint, coreContainsBaidu: true, goVersion: '1.26.8',
+  const android = { ...common, version, versionCode: 1800000000, appSource: androidCommit, target: 'android/arm64-v8a', signerSHA256: androidFingerprint, coreContainsBaidu: true, coreContainsMieru: true, goVersion: '1.26.8',
     checks: ['official-pinned-client', 'official-client-go-toolchain', 'custom-libbox-built-from-core', 'apk-assembly', 'apk-signature', 'package-id', 'version-metadata', 'arm64-v8a-only', 'elf64-aarch64-libbox', 'baidu-core-provenance'],
     artifacts: artifacts(androidDirectory, [`SFA-Baidu-${version}-arm64-v8a.apk`, 'SFA-version-metadata.json']) };
   writeJSON(join(coreDirectory, 'VALIDATION.json'), core);
@@ -71,6 +71,13 @@ function packages(f) {
   return { coreDirectory, windowsDirectory, androidDirectory, core, windows, android,
     cwd: f.repo, directory: join(f.root, 'release'), windowsFingerprint, androidFingerprint };
 }
+
+test('release collection rejects a client without mieru', t => {
+  const f = fixture(t), p = packages(f);
+  delete p.android.coreContainsMieru;
+  writeJSON(join(p.androidDirectory, 'ANDROID-VALIDATION.json'), p.android);
+  assert.throws(() => collectRelease(p), /must contain the mieru protocol/);
+});
 
 test('a full candidate bundle imports exactly the prepared commit and tree on another runner', t => {
   const f = fixture(t), exported = transfer(f), runner = join(f.root, 'runner');
@@ -93,8 +100,11 @@ test('candidate transfer rejects tampered bundle bytes before fetching or modify
 
 test('an unpushed stable candidate and its state reach a builder without changing the original branch', t => {
   const f = fixture(t), runner = join(f.root, 'runner'), upstream = join(f.root, 'upstream');
-  git(f.root, 'clone', f.repo, runner);
   git(f.root, 'clone', f.repo, upstream);
+  recordBaseline({ cwd: f.repo, upstream });
+  git(f.repo, 'add', BASELINE_FILE); git(f.repo, 'commit', '-m', 'Record fixture baseline');
+  f.head = git(f.repo, 'rev-parse', 'HEAD');
+  git(f.root, 'clone', f.repo, runner);
   git(upstream, 'config', 'user.name', 'Upstream fixture');
   git(upstream, 'config', 'user.email', 'upstream@example.invalid');
   writeFileSync(join(upstream, 'stable.txt'), 'new official stable\n');

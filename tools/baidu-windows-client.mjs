@@ -89,6 +89,13 @@ export function planWindowsPatches(root, version) {
   return files;
 }
 
+export function validateCustomOutbounds(bytes) {
+  for (const name of ['baidu', 'mieru']) {
+    assert(bytes.includes(Buffer.from(`github.com/sagernet/sing-box/protocol/${name}.NewOutbound`)),
+      `Packaged daemon is missing the ${name} outbound.`);
+  }
+}
+
 function prepare(root, version) {
   assert(!existsSync(statePath(root)), 'Windows preparation already ran; use a fresh checkout.');
   const head = git(root, 'rev-parse', 'HEAD');
@@ -252,7 +259,7 @@ function verify(root) {
   assert.equal(run(root, daemon, ['version'], true).split(/\r?\n/)[0], `sing-box-daemon version ${state.version}`,
     'Packaged daemon cannot run or its core version differs from the GUI.');
   for (const executable of [app, daemon, sharingModule]) assert.equal(portableExecutableMachine(readFileSync(executable)), 0x8664);
-  assert(readFileSync(daemon).includes(Buffer.from('github.com/sagernet/sing-box/protocol/baidu.NewOutbound')), 'Packaged daemon is missing the Baidu outbound.');
+  validateCustomOutbounds(readFileSync(daemon));
   assert.equal(executableContentDigest(readFileSync(daemon)),
     executableContentDigest(readFileSync(join(root, CLIENT, 'bin/windows/x64/sing-box-daemon.exe'))),
     'Packaged daemon content differs from the daemon built from this fork.');
@@ -273,7 +280,7 @@ function verify(root) {
     upstreamTag: state.upstreamTag, appSource: state.appSource, dashboardSource: state.dashboardSource,
     generated: state.generated, version: state.version,
     target: 'windows/amd64-gui', checks: CHECKS, signerSHA256: signatures.signerSHA256,
-    coreContainsBaidu: true, applicationMachine: 'amd64', daemonSHA256: hash(readFileSync(daemon)),
+    coreContainsBaidu: true, coreContainsMieru: true, applicationMachine: 'amd64', daemonSHA256: hash(readFileSync(daemon)),
     patches: state.patches, artifacts: [artifact] };
   writeFileSync(join(destination, 'WINDOWS-VALIDATION.json'), JSON.stringify(receipt, null, 2) + '\n');
   console.log(`Verified ${artifact.filename}: AMD64 GUI, custom Baidu daemon, matching self-signed identity.`);

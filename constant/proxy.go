@@ -11,6 +11,7 @@ const (
 	TypeSOCKS              = "socks"
 	TypeHTTP               = "http"
 	TypeBaidu              = "baidu"
+	TypeMieru              = "mieru"
 	TypeMixed              = "mixed"
 	TypeShadowsocks        = "shadowsocks"
 	TypeSnell              = "snell"
@@ -30,10 +31,7 @@ const (
 	TypeOpenConnect        = "openconnect"
 	TypeOpenVPNClient      = "openvpn-client"
 	TypeOpenVPNServer      = "openvpn-server"
-	TypeMASQUEClient       = "masque-client"
-	TypeMASQUEServer       = "masque-server"
 	TypeTailscale          = "tailscale"
-	TypeTailcat            = "tailcat"
 	TypeCloudflared        = "cloudflared"
 	TypeDERP               = "derp"
 	TypeResolved           = "resolved"
@@ -74,6 +72,8 @@ func ProxyDisplayName(proxyType string) string {
 		return "SOCKS"
 	case TypeHTTP:
 		return "HTTP"
+	case TypeMieru:
+		return "mieru"
 	case TypeBaidu:
 		return "Baidu"
 	case TypeMixed:
@@ -114,14 +114,8 @@ func ProxyDisplayName(proxyType string) string {
 		return "OpenVPN Client"
 	case TypeOpenVPNServer:
 		return "OpenVPN Server"
-	case TypeMASQUEClient:
-		return "MASQUE Client"
-	case TypeMASQUEServer:
-		return "MASQUE Server"
 	case TypeTailscale:
 		return "Tailscale"
-	case TypeTailcat:
-		return "Tailcat"
 	case TypeCloudflared:
 		return "Cloudflared"
 	case TypeSelector:
